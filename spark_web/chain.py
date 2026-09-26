@@ -26,6 +26,21 @@ MAIN_WALLET_ADDRESS = (
     "ckb1qrg6n7rh4mfltcruh8zjkcdtjmgx7fg2u6yre3ls5fprmvyhdlyzzqg7kpzlam02pxu0uvnaxymnj8g5cfmuadc5a4wf5"
 )
 DEFAULT_RPC_URL = "https://mainnet.ckb.dev/rpc"
+# 公开端点故障转移列表（按优先级）。mainnet.ckb.dev 走 Cloudflare，
+# 会按 User-Agent 封禁 Python-urllib（error 1010 → HTTP 403），
+# 必须带浏览器 UA（见 RPC_HEADERS）；其余端点可能因网络环境不可用，仅作后备。
+DEFAULT_RPC_URLS = (
+    "https://mainnet.ckb.dev/rpc",
+    "https://mainnet.ckb.dev",
+    "https://ckb.api.moe/rpc",
+    "https://mainnet.ckb.community.cloudflare-deploy.com/rpc",
+    "https://ckb-mainnet.unifra.io",
+)
+RPC_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
 RPC_RETRIES = 6
 RPC_TIMEOUT = 30
 INDEXER_PAGE_SIZE = 50  # get_transactions 单次分页条数（保守取值）
@@ -197,40 +212,87 @@ def decode_address(address: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# JSON-RPC（6 次重试，指数退避）
+# JSON-RPC（多端点故障转移；单端点内 6 次重试，指数退避；HTTP 403 立即换端点）
 # ---------------------------------------------------------------------------
 
 class ChainRPC:
-    def __init__(self, url: str = DEFAULT_RPC_URL, retries: int = RPC_RETRIES,
-                 timeout: int = RPC_TIMEOUT):
-        self.url = url
+    def __init__(self, url: Any = None, retries: int = RPC_RETRIES,
+                 timeout: int = RPC_TIMEOUT, urls: Any = None):
+        """url 可为单个端点或端点列表；缺省用 DEFAULT_RPC_URLS 故障转移列表。
+
+        urls 参数与 url 等价（列表形式），便于调用方显式注入端点。
+        """
+        if urls is not None and url is None:
+            url = urls
+        if url is None:
+            endpoints = list(DEFAULT_RPC_URLS)
+        elif isinstance(url, str):
+            endpoints = [url]
+        else:
+            endpoints = [str(item) for item in url]
+        if not endpoints:
+            raise ChainError("ChainRPC 需要至少一个 RPC 端点")
+        self.urls = endpoints
+        self.url = endpoints[0]  # 兼容旧属性
         self.retries = retries
         self.timeout = timeout
         self._id = 0
+        self._indexer_style: str | None = None  # None=未探测, "modern"=位置参数, "legacy"=对象参数
 
     def rpc(self, method: str, params: list[Any]) -> Any:
-        """JSON-RPC 2.0 调用，网络间歇断连时每请求重试 retries 次。"""
+        """JSON-RPC 2.0 调用：逐端点尝试，网络间歇断连时单端点内重试 retries 次。
+
+        HTTP 403（多为 Cloudflare 按 UA/IP 封禁，重试无意义）立即切换下一端点；
+        所有端点都失败才抛 ChainError，错误信息带每个端点的状态。
+        """
         body = json.dumps({"id": self._next_id(), "jsonrpc": "2.0",
                            "method": method, "params": params}).encode("utf-8")
-        last_error: Exception | None = None
-        for attempt in range(self.retries):
-            request = urllib.request.Request(self.url, data=body, method="POST",
-                                             headers={"Content-Type": "application/json"})
+        endpoint_errors: list[str] = []
+        for endpoint in self.urls:
+            last_error: Exception | None = None
+            for attempt in range(self.retries):
+                try:
+                    return self._post(endpoint, method, body)
+                except urllib.error.HTTPError as exc:
+                    # 403/1010 等封禁：换端点重试无意义，立即切换
+                    endpoint_errors.append(f"{endpoint} -> HTTP {exc.code}")
+                    last_error = exc
+                    break
+                except (urllib.error.URLError, TimeoutError, ConnectionError, ChainError,
+                        json.JSONDecodeError, OSError) as exc:
+                    last_error = exc
+                    if isinstance(exc, ChainError) and not str(exc).startswith("RPC"):
+                        raise
+                    if attempt + 1 < self.retries:
+                        time.sleep(min(2 ** attempt, 8))
+                        continue
+            else:
+                endpoint_errors.append(f"{endpoint} -> {last_error}")
+        detail = "; ".join(endpoint_errors) or "无端点可用"
+        raise ChainError(f"RPC {method} 失败（已尝试 {len(self.urls)} 个端点）: {detail}")
+
+    def _post(self, endpoint: str, method: str, body: bytes) -> Any:
+        """单次 POST 一个端点，返回 result；错误按类型抛出（HTTPError/URLError/ChainError）。"""
+        request = urllib.request.Request(
+            endpoint, data=body, method="POST",
+            headers={"Content-Type": "application/json", **RPC_HEADERS})
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("error"):
+            raise ChainError(f"RPC {method} 返回错误: {payload['error']}")
+        return payload.get("result")
+
+    def _rpc_probe(self, method: str, params: list[Any]) -> Any:
+        """无重试探测：逐端点只试一次；全部失败抛 ChainError（带各端点状态）。"""
+        body = json.dumps({"id": self._next_id(), "jsonrpc": "2.0",
+                           "method": method, "params": params}).encode("utf-8")
+        errors: list[str] = []
+        for endpoint in self.urls:
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                if payload.get("error"):
-                    raise ChainError(f"RPC {method} 返回错误: {payload['error']}")
-                return payload.get("result")
-            except (urllib.error.URLError, TimeoutError, ConnectionError, ChainError,
-                    json.JSONDecodeError, OSError) as exc:
-                last_error = exc
-                if isinstance(exc, ChainError) and not str(exc).startswith("RPC"):
-                    raise
-                if attempt + 1 < self.retries:
-                    time.sleep(min(2 ** attempt, 8))
-                    continue
-        raise ChainError(f"RPC {method} 连续 {self.retries} 次失败: {last_error}")
+                return self._post(endpoint, method, body)
+            except Exception as exc:
+                errors.append(f"{endpoint} -> {exc}")
+        raise ChainError(f"RPC {method} 探测失败: " + "; ".join(errors))
 
     def _next_id(self) -> int:
         self._id += 1
@@ -240,13 +302,30 @@ class ChainRPC:
         """indexer get_transactions 全量分页（group_by_transaction，after 游标）。"""
         script = {"code_hash": lock["code_hash"], "hash_type": _hash_type_name(lock.get("hash_type", 1)),
                   "args": lock["args"]}
+        search_key: dict[str, Any] = {"script": script, "script_type": "lock",
+                                      "group_by_transaction": True}
+        if self._indexer_style is None:
+            # 新旧 indexer 接口探测：新版节点（CKB ≥0.200 内建 indexer）要求位置参数
+            # [search_key, order, limit(0x), after?]；旧独立 indexer 用对象参数。
+            try:
+                self._rpc_probe("get_transactions", [search_key, "desc", "0x1"])
+                self._indexer_style = "modern"
+            except ChainError:
+                self._rpc_probe("get_transactions",
+                                [dict(search_key, order="desc", limit="1")])
+                self._indexer_style = "legacy"
         results: list[dict] = []
         after: str | None = None
         while True:
-            params = [{"script": script, "script_type": "lock", "order": "desc",
-                       "limit": str(INDEXER_PAGE_SIZE), "group_by_transaction": True}]
-            if after:
-                params[0]["after"] = after
+            if self._indexer_style == "legacy":
+                params: list[Any] = [dict(search_key, order="desc",
+                                          limit=str(INDEXER_PAGE_SIZE))]
+                if after:
+                    params[0]["after"] = after
+            else:
+                params = [search_key, "desc", hex(INDEXER_PAGE_SIZE)]
+                if after:
+                    params.append(after)
             page = self.rpc("get_transactions", params) or {}
             objects = page.get("objects") or []
             results.extend(objects)
@@ -267,7 +346,8 @@ class ChainRPC:
         raw = header.get("timestamp")
         if raw is None:
             return None
-        return int(str(raw), 16) if str(raw).startswith("0x") else int(raw)
+        millis = int(str(raw), 16) if str(raw).startswith("0x") else int(raw)
+        return millis // 1000  # CKB 时间戳为毫秒，下游 fromtimestamp 按秒处理
 
     def resolve_input(self, cell_input: dict) -> dict | None:
         """回溯 input 引用的上一笔交易输出，返回 {lock, capacity}；失败返回 None。"""
@@ -301,6 +381,28 @@ def _hex_int(value: Any) -> int:
         return value
     text = str(value)
     return int(text, 16) if text.startswith("0x") else int(text)
+
+
+def _io_kind(value: Any) -> int:
+    """indexer cells 的 io_type 归一化 → 0=input, 1=output。
+
+    兼容 "input"/"output"、0/1、"0x0"/"0x1" 等历史格式。"""
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("input", "0", "0x0"):
+            return 0
+        if text in ("output", "1", "0x1"):
+            return 1
+    else:
+        number = int(value)
+        if number in (0, 1):
+            return number
+    raise ChainError(f"未知 io_type: {value!r}")
+
+
+def _io_index(value: Any) -> int:
+    """cells 的 io_index 归一化：新版为 "0x1" 十六进制字符串，旧版可能是十进制。"""
+    return _hex_int(value)
 
 
 def _capacity_ckb(capacity: Any) -> float:
@@ -468,8 +570,8 @@ def fetch_main_wallet_records(rpc: ChainRPC, main_address: str = MAIN_WALLET_ADD
         cells = item.get("cells") or []
         if not cells and "io_type" in item:
             cells = [[item.get("io_type"), item.get("io_index")]]
-        main_inputs = [int(i) for kind, i in cells if int(kind) == 0 for i in [int(i)]]
-        main_outputs = [int(i) for kind, i in cells if int(kind) == 1 for i in [int(i)]]
+        main_inputs = [_io_index(i) for kind, i in cells if _io_kind(kind) == 0]
+        main_outputs = [_io_index(i) for kind, i in cells if _io_kind(kind) == 1]
         timestamp = None
         block_hash = (detail.get("tx_status") or {}).get("block_hash")
         if block_hash:
@@ -498,8 +600,8 @@ def fetch_multisig_records(rpc: ChainRPC, address: str) -> list[dict]:
         cells = item.get("cells") or []
         if not cells and "io_type" in item:
             cells = [[item.get("io_type"), item.get("io_index")]]
-        own_inputs = {int(i) for kind, i in cells if int(kind) == 0}
-        own_outputs = {int(i) for kind, i in cells if int(kind) == 1}
+        own_inputs = {_io_index(i) for kind, i in cells if _io_kind(kind) == 0}
+        own_outputs = {_io_index(i) for kind, i in cells if _io_kind(kind) == 1}
         if not own_inputs:
             continue  # 只关心多签作为付款方的交易
         outputs = transaction.get("outputs") or []

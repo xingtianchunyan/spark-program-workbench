@@ -1,6 +1,8 @@
 import datetime as dt
+import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 from spark_web import chain
@@ -50,6 +52,67 @@ class Bech32mTests(unittest.TestCase):
             chain.decode_address("ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq")
         with self.assertRaises(chain.ChainError):
             chain.decode_address("")
+
+
+class ChainRPCTests(unittest.TestCase):
+    """多端点故障转移与 indexer 字段归一化（用假 urlopen 注入，不走真实网络）。"""
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def _patch_urlopen(self, handler):
+        original = urllib.request.urlopen
+        urllib.request.urlopen = handler
+        self.addCleanup(setattr, urllib.request, "urlopen", original)
+
+    def test_403_fails_over_to_next_endpoint_without_retry(self):
+        calls = []
+
+        def handler(request, timeout=0):
+            endpoint = request.full_url
+            calls.append(endpoint)
+            if endpoint == "https://a.example/rpc":
+                raise urllib.error.HTTPError(endpoint, 403, "Forbidden", None, None)
+            return ChainRPCTests.FakeResponse(
+                {"id": 1, "jsonrpc": "2.0", "result": "0x10"})
+
+        self._patch_urlopen(handler)
+        rpc = chain.ChainRPC(urls=["https://a.example/rpc", "https://b.example/rpc"])
+        self.assertEqual(rpc.rpc("get_tip_block_number", []), "0x10")
+        self.assertEqual(calls.count("https://a.example/rpc"), 1)  # 403 不重试
+        self.assertEqual(calls.count("https://b.example/rpc"), 1)
+
+    def test_all_endpoints_fail_error_carries_each_status(self):
+        def handler(request, timeout=0):
+            endpoint = request.full_url
+            raise urllib.error.HTTPError(endpoint, 403, "Forbidden", None, None)
+
+        self._patch_urlopen(handler)
+        rpc = chain.ChainRPC(urls=["https://a.example/rpc", "https://b.example/rpc"])
+        with self.assertRaises(chain.ChainError) as ctx:
+            rpc.rpc("get_transactions", [])
+        message = str(ctx.exception)
+        self.assertIn("https://a.example/rpc -> HTTP 403", message)
+        self.assertIn("https://b.example/rpc -> HTTP 403", message)
+
+    def test_io_kind_and_index_accept_modern_and_legacy_formats(self):
+        self.assertEqual(chain._io_kind("input"), 0)
+        self.assertEqual(chain._io_kind("output"), 1)
+        self.assertEqual(chain._io_kind(0), 0)
+        self.assertEqual(chain._io_kind(1), 1)
+        self.assertEqual(chain._io_kind("0x1"), 1)
+        self.assertEqual(chain._io_index("0x2"), 2)
+        self.assertEqual(chain._io_index(3), 3)
 
 
 class ClassifyTests(unittest.TestCase):
