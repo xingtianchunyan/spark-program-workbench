@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.tmp
+spark_workbench.db
+spark_workbench.db-shm
+spark_workbench.db-wal
+*.log
+spark_task_data.before_web.json
+*.db.bak
+.DS_Store
+node_modules/
+launch-web.runtime
+spark_project_cache.json

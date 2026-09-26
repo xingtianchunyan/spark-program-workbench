@@ -1,0 +1,59 @@
+{
+  "api_version": "2026-03-11",
+  "dashboard_page_id": "2a0639bc-0d1b-833c-a3ca-010fd134795b",
+  "fund_pool_page_id": "146639bc-0d1b-83c1-8f11-81a8fa1c9261",
+  "project_list_page_id": "e95639bc-0d1b-83f5-952d-811d03c925b3",
+  "archive_page_id": "913639bc-0d1b-82b9-91b4-01163fb8d007",
+  "quantum_purse_template_page_id": "fc5639bc-0d1b-8340-ab75-8160d2bb774d",
+  "data_sources": {
+    "fund_allocations": "589639bc-0d1b-83ba-a2f3-075d058cd339",
+    "transactions": "ea3639bc-0d1b-82e3-8324-873a96961c01",
+    "ongoing_projects": "385639bc-0d1b-826e-a95d-077aac42d7c1",
+    "completed_projects": "5e0639bc-0d1b-8254-b985-075b92de3eb4"
+  },
+  "properties": {
+    "fund_allocations": {
+      "title": "项目名称 / Project Name",
+      "amount": "分配金额 / Allocated Amount",
+      "status": "状态 / Status",
+      "wallet": "项目多签钱包地址/Project Multisig Wallet Address"
+    },
+    "transactions": {
+      "title": "交易哈希 / TX Hash",
+      "type": "交易类型 / Type",
+      "date": "日期 / Date",
+      "amount": "金额 / Amount",
+      "purpose": "用途 / Purpose"
+    },
+    "ongoing_projects": {
+      "title": "项目名称 / Project Name",
+      "team": "团队 / Team",
+      "start_date": "开始日期 / Start Date",
+      "expected_completion": "预计完成日期 / Est. Completion",
+      "total_funding": "总资助金额 / Total Funding Amount",
+      "wallet": "项目多签钱包地址/Project Multisig Wallet Address",
+      "distributed": "已发放 / Distributed",
+      "status": "状态 / Status"
+    },
+    "completed_projects": {
+      "title": "项目名称 / Project Name",
+      "team": "团队 / Team",
+      "start_date": "开始日期 / Start Date",
+      "completion_date": "完成日期 / Completion Date",
+      "funding_amount": "资助金额 / Funding Amount",
+      "wallet": "项目多签钱包地址/Project Multisig Wallet Address",
+      "deliverables": "成果链接 / Deliverables",
+      "deliverables_2": "成果链接 2/ Deliverables 2",
+      "total_funding": "总资助金额 / Total Funding Amount",
+      "status": "状态 / Status",
+      "expected_completion": "预计完成日期 / Est. Completion"
+    }
+  },
+  "select_values": {
+    "ongoing": "进行中 / Ongoing",
+    "completed": "已完成 / Completed",
+    "shutdown": "关停 / Shutdown",
+    "withdrawal": "提款 / Withdrawal",
+    "deposit": "存款 / Deposit"
+  }
+}

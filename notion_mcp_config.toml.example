@@ -1,0 +1,4 @@
+# Optional interactive MCP connection for Codex or another MCP client.
+# Unattended browser automation uses NOTION_TOKEN from .env instead.
+[mcp_servers.notion]
+url = "https://mcp.notion.com/mcp"

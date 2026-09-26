@@ -1,0 +1,1982 @@
+{
+ "generated": "2026-08-26 15:01",
+ "chunk_count": 148,
+ "chunks": [
+  {
+   "id": "ckb/asset-protocols.md:文件说明",
+   "file": "ckb/asset-protocols.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "fiber"
+   ],
+   "chars": 154,
+   "preview": "# 文件说明 # CKB 资产协议与二层网络  > 用途：判断提案是否误解协议能力边界、是否与现有协议重复。 > 来源：nervosnetwork/rfcs、f"
+  },
+  {
+   "id": "ckb/asset-protocols.md:sudt-xudt-同质化代币",
+   "file": "ckb/asset-protocols.md",
+   "heading": "sUDT / xUDT（同质化代币）",
+   "level": 2,
+   "tags": [
+    "cell模型"
+   ],
+   "chars": 251,
+   "preview": "## sUDT / xUDT（同质化代币） - **sUDT**（Simple UDT）：CKB 最基础的代币标准，type script 保证发行总量守恒；发"
+  },
+  {
+   "id": "ckb/asset-protocols.md:spore-协议与-dob-链上数字对象",
+   "file": "ckb/asset-protocols.md",
+   "heading": "Spore 协议与 DOB（链上数字对象）",
+   "level": 2,
+   "tags": [
+    "spore",
+    "拒绝",
+    "案例",
+    "预审"
+   ],
+   "chars": 325,
+   "preview": "## Spore 协议与 DOB（链上数字对象） - **Spore Protocol**：CKB 原生 NFT/数字对象协议，铸造 **DOB（Digital"
+  },
+  {
+   "id": "ckb/asset-protocols.md:rgb-比特币资产协议",
+   "file": "ckb/asset-protocols.md",
+   "heading": "RGB++（比特币资产协议）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "cell模型",
+    "defi",
+    "fiber",
+    "rgb++"
+   ],
+   "chars": 337,
+   "preview": "## RGB++（比特币资产协议） - 将比特币 UTXO 与 CKB Cell **同构绑定**：比特币链提供所有权封印，CKB 提供计算与数据可用性；用户无"
+  },
+  {
+   "id": "ckb/asset-protocols.md:fiber-network-支付通道网络-重点",
+   "file": "ckb/asset-protocols.md",
+   "heading": "Fiber Network（支付通道网络，重点）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "defi",
+    "fiber",
+    "rgb++",
+    "拒绝",
+    "案例",
+    "结项",
+    "节点"
+   ],
+   "chars": 580,
+   "preview": "## Fiber Network（支付通道网络，重点） - CKB 上的支付通道网络（类比闪电网络）：双方在链上锁定资金开通道，通道内无限次即时、近零费交易，关"
+  },
+  {
+   "id": "ckb/asset-protocols.md:稳定币现状",
+   "file": "ckb/asset-protocols.md",
+   "heading": "稳定币现状",
+   "level": 2,
+   "tags": [
+    "cell模型",
+    "defi",
+    "结项",
+    "预算"
+   ],
+   "chars": 141,
+   "preview": "## 稳定币现状 - **USDI（UTXO Global）正在退出**：2026 年中起 USDI 逐步关闭（委员会纪要多次提及\"USDI 即将关闭，需尽快结"
+  },
+  {
+   "id": "ckb/asset-protocols.md:cota-聚合代币账户",
+   "file": "ckb/asset-protocols.md",
+   "heading": "CoTA（聚合代币账户）",
+   "level": 2,
+   "tags": [
+    "spore"
+   ],
+   "chars": 108,
+   "preview": "## CoTA（聚合代币账户） - 基于 SMT 的账户式资产管理方案（一个 Cell 管理多种代币），适合\"一个地址持大量币种\"的场景；热度低于 sUDT/x"
+  },
+  {
+   "id": "ckb/asset-protocols.md:跨链桥",
+   "file": "ckb/asset-protocols.md",
+   "heading": "跨链桥",
+   "level": 2,
+   "tags": [
+    "fiber",
+    "rgb++",
+    "通过"
+   ],
+   "chars": 116,
+   "preview": "## 跨链桥 - Force Bridge 已停运（2025-06 被攻击）；Rosen Bridge 为社区批准的继任方案（2026-01）。 - 托管桥类提"
+  },
+  {
+   "id": "ckb/core-concepts.md:文件说明",
+   "file": "ckb/core-concepts.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "预审"
+   ],
+   "chars": 117,
+   "preview": "# 文件说明 # CKB 核心概念（预审技术判断基准）  > 用途：判断提案的技术描述是否准确、是否误解 CKB 基本机制。 > 来源：docs.nervos."
+  },
+  {
+   "id": "ckb/core-concepts.md:cell-模型-ckb-的-utxo-扩展",
+   "file": "ckb/core-concepts.md",
+   "heading": "Cell 模型（CKB 的 UTXO 扩展）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "cell模型",
+    "验证"
+   ],
+   "chars": 428,
+   "preview": "## Cell 模型（CKB 的 UTXO 扩展） - CKB 的状态单元是 **Cell**，可视为\"通用化 UTXO\"：每个 Cell 包含 `capaci"
+  },
+  {
+   "id": "ckb/core-concepts.md:lock-script-与-type-script",
+   "file": "ckb/core-concepts.md",
+   "heading": "Lock Script 与 Type Script",
+   "level": 2,
+   "tags": [
+    "cell模型",
+    "spore",
+    "拒绝",
+    "案例",
+    "通过",
+    "钱包"
+   ],
+   "chars": 353,
+   "preview": "## Lock Script 与 Type Script - **Lock Script**：决定谁能花费这个 Cell（默认 secp256k1 签名；也有 "
+  },
+  {
+   "id": "ckb/core-concepts.md:ckb-vm",
+   "file": "ckb/core-concepts.md",
+   "heading": "CKB-VM",
+   "level": 2,
+   "tags": [
+    "开发工具"
+   ],
+   "chars": 221,
+   "preview": "## CKB-VM - 基于 **RISC-V** 指令集的虚拟机，脚本可用任何能编译到 RISC-V 的语言编写（主流为 Rust，也有 C）。 - 2025"
+  },
+  {
+   "id": "ckb/core-concepts.md:代币与经济模型基础",
+   "file": "ckb/core-concepts.md",
+   "heading": "代币与经济模型基础",
+   "level": 2,
+   "tags": [
+    "ai",
+    "cell模型",
+    "dao",
+    "defi",
+    "fiber",
+    "钱包",
+    "预算"
+   ],
+   "chars": 256,
+   "preview": "## 代币与经济模型基础 - CKB 原生代币用途：支付存储占用（capacity）、矿工手续费、Nervos DAO 质押。 - **二级发行**（每年固定约"
+  },
+  {
+   "id": "ckb/core-concepts.md:账户抽象与签名方案现状",
+   "file": "ckb/core-concepts.md",
+   "heading": "账户抽象与签名方案现状",
+   "level": 2,
+   "tags": [
+    "钱包",
+    "预审"
+   ],
+   "chars": 228,
+   "preview": "## 账户抽象与签名方案现状 - 默认 secp256k1（与比特币相同曲线，地址格式不同）。 - **JoyID**：passkey 钱包（生物识别，无助记词"
+  },
+  {
+   "id": "ckb/core-concepts.md:跨链现状-安全敏感区",
+   "file": "ckb/core-concepts.md",
+   "heading": "跨链现状（安全敏感区）",
+   "level": 2,
+   "tags": [
+    "fiber",
+    "rgb++",
+    "通过",
+    "预算"
+   ],
+   "chars": 184,
+   "preview": "## 跨链现状（安全敏感区） - **Force Bridge 已于 2025-06 被攻击**（约 $390 万损失），随后停运；2026-01 社区批准 *"
+  },
+  {
+   "id": "ckb/core-concepts.md:硬分叉时间线-判断-最新-表述的基准",
+   "file": "ckb/core-concepts.md",
+   "heading": "硬分叉时间线（判断\"最新\"表述的基准）",
+   "level": 2,
+   "tags": [
+    "dao"
+   ],
+   "chars": 130,
+   "preview": "## 硬分叉时间线（判断\"最新\"表述的基准） - 2019-11 主网上线（Lina） - 2021-2022 Mirana（协议升级） - 2025-07-0"
+  },
+  {
+   "id": "ckb/dev-stack.md:文件说明",
+   "file": "ckb/dev-stack.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "开发工具",
+    "预审",
+    "验证"
+   ],
+   "chars": 140,
+   "preview": "# 文件说明 # CKB 开发栈（验证方式与可行性判断基准）  > 用途：预审时判断提案的\"验证方式是否低成本可复现\"、技术选型是否过时。 > 来源：githu"
+  },
+  {
+   "id": "ckb/dev-stack.md:sdk-现状-重要-避免推荐过时栈",
+   "file": "ckb/dev-stack.md",
+   "heading": "SDK 现状（重要：避免推荐过时栈）",
+   "level": 2,
+   "tags": [
+    "spore",
+    "开发工具",
+    "案例",
+    "钱包"
+   ],
+   "chars": 467,
+   "preview": "## SDK 现状（重要：避免推荐过时栈） | SDK | 状态 | 评审口径 | |-----|------|---------| | **CCC（CKBer"
+  },
+  {
+   "id": "ckb/dev-stack.md:本地开发与测试链",
+   "file": "ckb/dev-stack.md",
+   "heading": "本地开发与测试链",
+   "level": 2,
+   "tags": [
+    "开发工具",
+    "案例",
+    "节点",
+    "预审",
+    "验证"
+   ],
+   "chars": 283,
+   "preview": "## 本地开发与测试链 - **OffCKB**：现行本地开发脚手架（一条命令起 dev 链 + 内置测试账户 + 部署脚本），提案 PoC 阶段的标准选择。 "
+  },
+  {
+   "id": "ckb/dev-stack.md:节点与数据服务",
+   "file": "ckb/dev-stack.md",
+   "heading": "节点与数据服务",
+   "level": 2,
+   "tags": [
+    "ai",
+    "defi",
+    "开发工具",
+    "节点",
+    "验证"
+   ],
+   "chars": 256,
+   "preview": "## 节点与数据服务 - **全节点（ckb）**：Rust 实现，支持 mainnet/testnet/devnet；同步主网需要相当磁盘与时间，不适合作为\""
+  },
+  {
+   "id": "ckb/dev-stack.md:命令行与部署工具",
+   "file": "ckb/dev-stack.md",
+   "heading": "命令行与部署工具",
+   "level": 2,
+   "tags": [
+    "dao",
+    "开发工具",
+    "钱包"
+   ],
+   "chars": 152,
+   "preview": "## 命令行与部署工具 - **ckb-cli**：官方 CLI（账户、交易、DAO、部署脚本交互），兼容 Neuron 的 keystore。 - **部署脚"
+  },
+  {
+   "id": "ckb/dev-stack.md:智能合约-链上脚本-开发",
+   "file": "ckb/dev-stack.md",
+   "heading": "智能合约（链上脚本）开发",
+   "level": 2,
+   "tags": [
+    "验证"
+   ],
+   "chars": 218,
+   "preview": "## 智能合约（链上脚本）开发 - 主流语言 **Rust**（ckb-std 库），也有 C；无 EVM 兼容层（Godwoken 已淡出，勿按\"CKB 上跑"
+  },
+  {
+   "id": "ckb/dev-stack.md:钱包集成",
+   "file": "ckb/dev-stack.md",
+   "heading": "钱包集成",
+   "level": 2,
+   "tags": [
+    "dao",
+    "开发工具",
+    "案例",
+    "节点",
+    "钱包"
+   ],
+   "chars": 211,
+   "preview": "## 钱包集成 - **CCC 钱包连接器**：支持 JoyID、OKX、UniSat、imToken 等，新 dApp 不应自研钱包连接 UI（见 Cell "
+  },
+  {
+   "id": "ckb/dev-stack.md:常见过时认知清单-预审纠错用",
+   "file": "ckb/dev-stack.md",
+   "heading": "常见过时认知清单（预审纠错用）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "开发工具",
+    "案例",
+    "节点",
+    "预审",
+    "验证"
+   ],
+   "chars": 279,
+   "preview": "## 常见过时认知清单（预审纠错用） 1. \"用 ckb-sdk-js / Lumos 从零开发\" → 应推荐 CCC。 2. \"需要用户跑全节点才能验证\" →"
+  },
+  {
+   "id": "ckb/existing-projects.md:文件说明",
+   "file": "ckb/existing-projects.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "案例",
+    "预审"
+   ],
+   "chars": 148,
+   "preview": "# 文件说明 # CKB 生态已有项目与工具清单（重复资助检查用）  > 用途：预审时识别\"重复造轮子\"与\"生态已有同类\"，也是\"建议在 X 基础上做\"的依据。"
+  },
+  {
+   "id": "ckb/existing-projects.md:钱包",
+   "file": "ckb/existing-projects.md",
+   "heading": "钱包",
+   "level": 2,
+   "tags": [
+    "dao",
+    "rgb++",
+    "节点",
+    "钱包"
+   ],
+   "chars": 273,
+   "preview": "## 钱包 | 项目 | 形态 | 特点 | |------|------|------| | JoyID | Web/插件 | passkey 生物识别，无助"
+  },
+  {
+   "id": "ckb/existing-projects.md:开发工具-官方-主流",
+   "file": "ckb/existing-projects.md",
+   "heading": "开发工具（官方/主流）",
+   "level": 2,
+   "tags": [
+    "defi",
+    "开发工具",
+    "节点",
+    "钱包"
+   ],
+   "chars": 275,
+   "preview": "## 开发工具（官方/主流） | 项目 | 用途 | |------|------| | CCC（CKBers' Codebase） | 现行推荐 JS/TS "
+  },
+  {
+   "id": "ckb/existing-projects.md:fiber-network-生态",
+   "file": "ckb/existing-projects.md",
+   "heading": "Fiber Network 生态",
+   "level": 2,
+   "tags": [
+    "defi",
+    "fiber",
+    "结项",
+    "节点"
+   ],
+   "chars": 294,
+   "preview": "## Fiber Network 生态 | 项目 | 状态 | 说明 | |------|------|------| | Fiber Node (FNN) |"
+  },
+  {
+   "id": "ckb/existing-projects.md:nft-dob-资产",
+   "file": "ckb/existing-projects.md",
+   "heading": "NFT / DOB / 资产",
+   "level": 2,
+   "tags": [
+    "spore"
+   ],
+   "chars": 165,
+   "preview": "## NFT / DOB / 资产 | 项目 | 说明 | |------|------| | Spore Protocol | 官方 DOB 协议（内容完全上"
+  },
+  {
+   "id": "ckb/existing-projects.md:defi-交易",
+   "file": "ckb/existing-projects.md",
+   "heading": "DeFi / 交易",
+   "level": 2,
+   "tags": [
+    "cell模型",
+    "defi",
+    "fiber",
+    "rgb++"
+   ],
+   "chars": 116,
+   "preview": "## DeFi / 交易 | 项目 | 说明 | |------|------| | UTXOSwap | RGB++/CKB 资产的 AMM DEX | | "
+  },
+  {
+   "id": "ckb/existing-projects.md:治理与资金渠道",
+   "file": "ckb/existing-projects.md",
+   "heading": "治理与资金渠道",
+   "level": 2,
+   "tags": [
+    "dao",
+    "案例",
+    "预算"
+   ],
+   "chars": 211,
+   "preview": "## 治理与资金渠道 | 渠道 | 说明 | |------|------| | Nervos DAO | 原生质押对冲通胀 | | DAO 1.1 | 202"
+  },
+  {
+   "id": "ckb/existing-projects.md:spark-已资助项目-判例库快照-详见-knowledge-spark-precedents-md",
+   "file": "ckb/existing-projects.md",
+   "heading": "Spark 已资助项目（判例库快照，详见 knowledge/spark/precedents.md）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "defi",
+    "fiber",
+    "rgb++",
+    "spore",
+    "拒绝",
+    "教育",
+    "案例",
+    "结项",
+    "钱包",
+    "验证"
+   ],
+   "chars": 445,
+   "preview": "## Spark 已资助项目（判例库快照，详见 knowledge/spark/precedents.md） - 已结项：Fiber Checkout、Nerv"
+  },
+  {
+   "id": "ckb/existing-projects.md:使用注意",
+   "file": "ckb/existing-projects.md",
+   "heading": "使用注意",
+   "level": 2,
+   "tags": [
+    "fiber",
+    "拒绝",
+    "案例",
+    "结项",
+    "预审"
+   ],
+   "chars": 159,
+   "preview": "## 使用注意 1. 本清单用于\"是否已有同类\"的初筛；引用具体项目状态前最好点开链接快速核实。 2. \"已有同类\"不等于一律拒绝——有明确差异化突破的仍可支持"
+  },
+  {
+   "id": "ckb/review-playbook.md:文件说明",
+   "file": "ckb/review-playbook.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "ai",
+    "案例",
+    "预审"
+   ],
+   "chars": 101,
+   "preview": "# 文件说明 # 技术评审手册（按提案类型的评审要点）  > 用途：AI 预审第三步\"逻辑真实性与可行性分析\"的直接依据。 > 每条要点均来自委员会历史判例或 "
+  },
+  {
+   "id": "ckb/review-playbook.md:通用红旗清单-任何类型都先过一遍",
+   "file": "ckb/review-playbook.md",
+   "heading": "通用红旗清单（任何类型都先过一遍）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "dao",
+    "fiber",
+    "开发工具",
+    "拒绝",
+    "教育",
+    "案例",
+    "通过",
+    "钱包",
+    "预审",
+    "验证"
+   ],
+   "chars": 565,
+   "preview": "## 通用红旗清单（任何类型都先过一遍） 1. **基本概念错误**：如\"转账需部署合约\"（DevLaunch Kit 判例）——直接怀疑真实性。 2. **无"
+  },
+  {
+   "id": "ckb/review-playbook.md:开发工具类-npm-包-cli-sdk-脚手架",
+   "file": "ckb/review-playbook.md",
+   "heading": "开发工具类（npm 包 / CLI / SDK / 脚手架）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "fiber",
+    "开发工具",
+    "教育",
+    "案例",
+    "节点",
+    "验证"
+   ],
+   "chars": 315,
+   "preview": "## 开发工具类（npm 包 / CLI / SDK / 脚手架） - 验证标准：`npm install && npm test` 或 `docker com"
+  },
+  {
+   "id": "ckb/review-playbook.md:钱包-支付类",
+   "file": "ckb/review-playbook.md",
+   "heading": "钱包 / 支付类",
+   "level": 2,
+   "tags": [
+    "defi",
+    "fiber",
+    "开发工具",
+    "拒绝",
+    "案例",
+    "钱包",
+    "预算",
+    "验证"
+   ],
+   "chars": 245,
+   "preview": "## 钱包 / 支付类 - 必答：与 JoyID、CKBull、Neuron、imToken、CCC 钱包连接器的差异；收款在线问题如何解决（Fiber 场景）"
+  },
+  {
+   "id": "ckb/review-playbook.md:defi-dex-swap-类",
+   "file": "ckb/review-playbook.md",
+   "heading": "DeFi / DEX / Swap 类",
+   "level": 2,
+   "tags": [
+    "defi",
+    "fiber",
+    "rgb++",
+    "案例"
+   ],
+   "chars": 187,
+   "preview": "## DeFi / DEX / Swap 类 - 先区分：链上 AMM（Cell Script AMM 判例：\"过于激进，距离 Spark 范围太远\"）vs F"
+  },
+  {
+   "id": "ckb/review-playbook.md:教育-文档-新手引导类-委员会重点管控类型",
+   "file": "ckb/review-playbook.md",
+   "heading": "教育 / 文档 / 新手引导类（委员会重点管控类型）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "教育",
+    "案例",
+    "结项",
+    "预审"
+   ],
+   "chars": 292,
+   "preview": "## 教育 / 文档 / 新手引导类（委员会重点管控类型） - 硬性条件（委员会 2026-07-21 确立）：开发者必须**非常熟悉生态** + 内容包含新手"
+  },
+  {
+   "id": "ckb/review-playbook.md:社区-运营-游戏类",
+   "file": "ckb/review-playbook.md",
+   "heading": "社区 / 运营 / 游戏类",
+   "level": 2,
+   "tags": [
+    "defi",
+    "案例",
+    "预算",
+    "验证"
+   ],
+   "chars": 167,
+   "preview": "## 社区 / 运营 / 游戏类 - 综合类（技术+社区）上限 $2,000，须同时交付技术产物与社区活动并详细论证。 - 验证难点要前置回答：CKB UGMP"
+  },
+  {
+   "id": "ckb/review-playbook.md:ai-结合类-新兴高频类型",
+   "file": "ckb/review-playbook.md",
+   "heading": "AI 结合类（新兴高频类型）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "开发工具",
+    "拒绝",
+    "案例",
+    "结项",
+    "钱包"
+   ],
+   "chars": 258,
+   "preview": "## AI 结合类（新兴高频类型） - 数据真实性：Wallet Behaviour 警告判例——\"自己造机器人然后分析毫无意义\"；AI 分析必须基于真实主网数"
+  },
+  {
+   "id": "ckb/review-playbook.md:节点-基础设施类",
+   "file": "ckb/review-playbook.md",
+   "heading": "节点 / 基础设施类",
+   "level": 2,
+   "tags": [
+    "案例",
+    "节点",
+    "通过",
+    "预算"
+   ],
+   "chars": 129,
+   "preview": "## 节点 / 基础设施类 - 硬件+运营混合预算：NNCBN 判例——Spark 不提供长期运营支持，最多支持硬件+首季运营（$1,080）。 - 公共物品属"
+  },
+  {
+   "id": "ckb/review-playbook.md:协议-底层研发类",
+   "file": "ckb/review-playbook.md",
+   "heading": "协议 / 底层研发类",
+   "level": 2,
+   "tags": [
+    "ai",
+    "案例",
+    "预算"
+   ],
+   "chars": 188,
+   "preview": "## 协议 / 底层研发类 - 超出 Spark 范围居多：QUIC（\"不属于 Spark 范围\"）、CKB Appchain Kit（核心问题未说明如何解决）"
+  },
+  {
+   "id": "ckb/review-playbook.md:中期-结项评审要点",
+   "file": "ckb/review-playbook.md",
+   "heading": "中期 / 结项评审要点",
+   "level": 2,
+   "tags": [
+    "打款",
+    "案例",
+    "结项",
+    "通过",
+    "预审"
+   ],
+   "chars": 218,
+   "preview": "## 中期 / 结项评审要点 - 以**提案基线锁定版**为准逐项验收（Approved 时锁定提案内容）。 - 中期常见拒付理由：交付质量未达承诺标准、Dem"
+  },
+  {
+   "id": "spark/precedents.md:文件说明",
+   "file": "spark/precedents.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "ai",
+    "案例",
+    "预审"
+   ],
+   "chars": 163,
+   "preview": "# 文件说明 # Spark Program 判例案例库  > 由 build_precedents.py 自动生成（数据源：工具内会议纪要），请勿手工编辑本文"
+  },
+  {
+   "id": "spark/precedents.md:典型判例速查-人工维护",
+   "file": "spark/precedents.md",
+   "heading": "典型判例速查（人工维护）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "dao",
+    "defi",
+    "fiber",
+    "开发工具",
+    "拒绝",
+    "教育",
+    "案例",
+    "结项",
+    "通过",
+    "预算"
+   ],
+   "chars": 791,
+   "preview": "## 典型判例速查（人工维护） | 情形 | 判例 | 结论 | |------|------|------| | 纯技术项目超 $1,000 | Fiber "
+  },
+  {
+   "id": "spark/precedents.md:atlantik-最近状态-通过",
+   "file": "spark/precedents.md",
+   "heading": "Atlantik（最近状态：通过）",
+   "level": 3,
+   "tags": [
+    "节点",
+    "通过",
+    "预算"
+   ],
+   "chars": 301,
+   "preview": "### Atlantik（最近状态：通过） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026"
+  },
+  {
+   "id": "spark/precedents.md:ccc-vibe-coding-scaffold-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "CCC Vibe-Coding Scaffold（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "开发工具",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 277,
+   "preview": "### CCC Vibe-Coding Scaffold（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|-----"
+  },
+  {
+   "id": "spark/precedents.md:cell-model-documentation-hub-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Cell Model Documentation hub（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "cell模型",
+    "拒绝",
+    "教育",
+    "预算"
+   ],
+   "chars": 293,
+   "preview": "### Cell Model Documentation hub（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|-"
+  },
+  {
+   "id": "spark/precedents.md:cell-sandbox-最近状态-完成",
+   "file": "spark/precedents.md",
+   "heading": "Cell Sandbox（最近状态：完成）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "开发工具",
+    "教育",
+    "结项",
+    "通过",
+    "钱包",
+    "预算"
+   ],
+   "chars": 1000,
+   "preview": "### Cell Sandbox（最近状态：完成） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | "
+  },
+  {
+   "id": "spark/precedents.md:cell-script-amm-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Cell Script AMM（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 210,
+   "preview": "### Cell Script AMM（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------|"
+  },
+  {
+   "id": "spark/precedents.md:cellar-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Cellar（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "cell模型",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 380,
+   "preview": "### Cellar（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-0"
+  },
+  {
+   "id": "spark/precedents.md:cellkit-actions-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "CellKit Actions（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "开发工具",
+    "拒绝",
+    "节点",
+    "预算"
+   ],
+   "chars": 273,
+   "preview": "### CellKit Actions（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------|"
+  },
+  {
+   "id": "spark/precedents.md:cellmint-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "CellMint（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "开发工具",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 318,
+   "preview": "### CellMint（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026"
+  },
+  {
+   "id": "spark/precedents.md:ckb-appchain-kit-mvp-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "CKB Appchain Kit Mvp（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 238,
+   "preview": "### CKB Appchain Kit Mvp（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|--"
+  },
+  {
+   "id": "spark/precedents.md:ckb-builder-lab-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "CKB Builder Lab（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "教育",
+    "通过",
+    "预审",
+    "预算"
+   ],
+   "chars": 476,
+   "preview": "### CKB Builder Lab（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------|"
+  },
+  {
+   "id": "spark/precedents.md:ckb-developer-onboarding-最近状态-关闭",
+   "file": "spark/precedents.md",
+   "heading": "CKB Developer Onboarding（最近状态：关闭）",
+   "level": 3,
+   "tags": [
+    "开发工具",
+    "拒绝",
+    "教育",
+    "结项",
+    "通过",
+    "预算"
+   ],
+   "chars": 425,
+   "preview": "### CKB Developer Onboarding（最近状态：关闭） | 日期 | 决议 | 预算 | 要点 | |------|------|-----"
+  },
+  {
+   "id": "spark/precedents.md:ckb-joyid-failure-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "CKB joyid failure（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "拒绝",
+    "钱包",
+    "预算"
+   ],
+   "chars": 309,
+   "preview": "### CKB joyid failure（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|-----"
+  },
+  {
+   "id": "spark/precedents.md:ckb-nft-market-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "CKB NFT Market（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 247,
+   "preview": "### CKB NFT Market（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| "
+  },
+  {
+   "id": "spark/precedents.md:ckb-probe-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "CKB Probe（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "教育",
+    "节点",
+    "通过",
+    "预算"
+   ],
+   "chars": 593,
+   "preview": "### CKB Probe（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 202"
+  },
+  {
+   "id": "spark/precedents.md:ckb-ugmp-最近状态-通过",
+   "file": "spark/precedents.md",
+   "heading": "CKB UGMP（最近状态：通过）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "defi",
+    "spore",
+    "催更",
+    "教育",
+    "通过",
+    "预算",
+    "验证"
+   ],
+   "chars": 944,
+   "preview": "### CKB UGMP（最近状态：通过） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026"
+  },
+  {
+   "id": "spark/precedents.md:ckb-lint-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "CKB-lint（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "拒绝",
+    "预算"
+   ],
+   "chars": 253,
+   "preview": "### CKB-lint（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026"
+  },
+  {
+   "id": "spark/precedents.md:ckb-vm-最近状态-通过",
+   "file": "spark/precedents.md",
+   "heading": "CKB-VM（最近状态：通过）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "通过",
+    "预算",
+    "验证"
+   ],
+   "chars": 339,
+   "preview": "### CKB-VM（最近状态：通过） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-0"
+  },
+  {
+   "id": "spark/precedents.md:corven-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Corven（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "dao",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 379,
+   "preview": "### Corven（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-0"
+  },
+  {
+   "id": "spark/precedents.md:devlaunch-kit-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "DevLaunch Kit（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "拒绝",
+    "教育",
+    "预算"
+   ],
+   "chars": 211,
+   "preview": "### DevLaunch Kit（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| |"
+  },
+  {
+   "id": "spark/precedents.md:did-quickstart-kit-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "DID Quickstart kit（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "拒绝",
+    "预算"
+   ],
+   "chars": 242,
+   "preview": "### DID Quickstart kit（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|----"
+  },
+  {
+   "id": "spark/precedents.md:discourse-for-dao-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Discourse for DAO（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "dao",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 414,
+   "preview": "### Discourse for DAO（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|-----"
+  },
+  {
+   "id": "spark/precedents.md:dob-pattern-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "DOB Pattern（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "spore",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 190,
+   "preview": "### DOB Pattern（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2"
+  },
+  {
+   "id": "spark/precedents.md:doctor-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "doctor（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "拒绝",
+    "教育",
+    "预算"
+   ],
+   "chars": 401,
+   "preview": "### doctor（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-0"
+  },
+  {
+   "id": "spark/precedents.md:dular-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "Dular（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "cell模型",
+    "defi",
+    "催更",
+    "打款",
+    "结项",
+    "通过",
+    "预审",
+    "预算",
+    "验证"
+   ],
+   "chars": 656,
+   "preview": "### Dular（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-04"
+  },
+  {
+   "id": "spark/precedents.md:fiber-checkout-最近状态-完成",
+   "file": "spark/precedents.md",
+   "heading": "Fiber Checkout（最近状态：完成）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "defi",
+    "fiber",
+    "开发工具",
+    "教育",
+    "结项",
+    "节点",
+    "通过",
+    "钱包",
+    "预算",
+    "验证"
+   ],
+   "chars": 579,
+   "preview": "### Fiber Checkout（最近状态：完成） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| "
+  },
+  {
+   "id": "spark/precedents.md:fiber-pay-studio-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Fiber Pay Studio（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "fiber",
+    "拒绝",
+    "钱包",
+    "预算",
+    "验证"
+   ],
+   "chars": 301,
+   "preview": "### Fiber Pay Studio（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------"
+  },
+  {
+   "id": "spark/precedents.md:fiber-rgb-swap-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "Fiber RGB++ Swap（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "fiber",
+    "rgb++",
+    "预算"
+   ],
+   "chars": 334,
+   "preview": "### Fiber RGB++ Swap（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------"
+  },
+  {
+   "id": "spark/precedents.md:fiber-submarine-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Fiber Submarine（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "fiber",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 252,
+   "preview": "### Fiber Submarine（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------|"
+  },
+  {
+   "id": "spark/precedents.md:fibersplit-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "Fibersplit（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "fiber",
+    "预算"
+   ],
+   "chars": 194,
+   "preview": "### Fibersplit（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 20"
+  },
+  {
+   "id": "spark/precedents.md:fibertap-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "FiberTap（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "fiber",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 227,
+   "preview": "### FiberTap（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026"
+  },
+  {
+   "id": "spark/precedents.md:hash-this-最近状态-关闭",
+   "file": "spark/precedents.md",
+   "heading": "Hash This（最近状态：关闭）",
+   "level": 3,
+   "tags": [
+    "结项",
+    "预算",
+    "验证"
+   ],
+   "chars": 232,
+   "preview": "### Hash This（最近状态：关闭） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 202"
+  },
+  {
+   "id": "spark/precedents.md:joyid-connect-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "Joyid connect（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "钱包",
+    "预算"
+   ],
+   "chars": 230,
+   "preview": "### Joyid connect（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| |"
+  },
+  {
+   "id": "spark/precedents.md:nervos-brain-最近状态-完成",
+   "file": "spark/precedents.md",
+   "heading": "Nervos Brain（最近状态：完成）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "cell模型",
+    "dao",
+    "fiber",
+    "教育",
+    "结项",
+    "通过",
+    "预算"
+   ],
+   "chars": 1198,
+   "preview": "### Nervos Brain（最近状态：完成） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | "
+  },
+  {
+   "id": "spark/precedents.md:nncbn-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "NNCBN（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "节点",
+    "通过",
+    "预算"
+   ],
+   "chars": 346,
+   "preview": "### NNCBN（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-08"
+  },
+  {
+   "id": "spark/precedents.md:programmable-recovery-for-ckb-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "Programmable Recovery for CKB（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "预算"
+   ],
+   "chars": 205,
+   "preview": "### Programmable Recovery for CKB（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|"
+  },
+  {
+   "id": "spark/precedents.md:quic-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "QUIC（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "拒绝",
+    "预算"
+   ],
+   "chars": 261,
+   "preview": "### QUIC（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-08-"
+  },
+  {
+   "id": "spark/precedents.md:spark-verify-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "SPark Verify（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "预算",
+    "验证"
+   ],
+   "chars": 218,
+   "preview": "### SPark Verify（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | "
+  },
+  {
+   "id": "spark/precedents.md:spark-verify-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "Spark Verify（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "预算",
+    "验证"
+   ],
+   "chars": 222,
+   "preview": "### Spark Verify（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | "
+  },
+  {
+   "id": "spark/precedents.md:spore-metadata-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "Spore Metadata（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "spore",
+    "拒绝",
+    "预审",
+    "预算"
+   ],
+   "chars": 344,
+   "preview": "### Spore Metadata（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| "
+  },
+  {
+   "id": "spark/precedents.md:tiko-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "TiKo（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "拒绝",
+    "预算",
+    "验证"
+   ],
+   "chars": 413,
+   "preview": "### TiKo（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-05-"
+  },
+  {
+   "id": "spark/precedents.md:vibequest-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "VibeQuest（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "拒绝",
+    "教育",
+    "预算"
+   ],
+   "chars": 428,
+   "preview": "### VibeQuest（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 202"
+  },
+  {
+   "id": "spark/precedents.md:wallet-behaviour-最近状态-待定",
+   "file": "spark/precedents.md",
+   "heading": "Wallet Behaviour（最近状态：待定）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "dao",
+    "催更",
+    "通过",
+    "钱包",
+    "预算"
+   ],
+   "chars": 544,
+   "preview": "### Wallet Behaviour（最近状态：待定） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------"
+  },
+  {
+   "id": "spark/precedents.md:woocommerce-最近状态-拒绝",
+   "file": "spark/precedents.md",
+   "heading": "WooCommerce（最近状态：拒绝）",
+   "level": 3,
+   "tags": [
+    "defi",
+    "fiber",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 334,
+   "preview": "### WooCommerce（最近状态：拒绝） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2"
+  },
+  {
+   "id": "spark/precedents.md:zk-lock-最近状态-通过",
+   "file": "spark/precedents.md",
+   "heading": "zk-Lock（最近状态：通过）",
+   "level": 3,
+   "tags": [
+    "通过",
+    "预算"
+   ],
+   "chars": 264,
+   "preview": "### zk-Lock（最近状态：通过） | 日期 | 决议 | 预算 | 要点 | |------|------|------|------| | 2026-"
+  },
+  {
+   "id": "spark/rules.md:文件说明",
+   "file": "spark/rules.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "预审"
+   ],
+   "chars": 138,
+   "preview": "# 文件说明 # Spark Program 规则章程（工具唯一权威来源）  > 本文件是 spark_task_tracker.py 预审与起草功能的规则数据"
+  },
+  {
+   "id": "spark/rules.md:资金档位标准-2026-06-版-现行",
+   "file": "spark/rules.md",
+   "heading": "资金档位标准（2026-06 版，现行）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "fiber",
+    "开发工具",
+    "案例",
+    "预算",
+    "验证"
+   ],
+   "chars": 448,
+   "preview": "## 资金档位标准（2026-06 版，现行） | 档位 | 上限 | 适用 | 说明 | |------|------|------|------| | 纯技"
+  },
+  {
+   "id": "spark/rules.md:提案模板标准章节-格式完整性比对基准",
+   "file": "spark/rules.md",
+   "heading": "提案模板标准章节（格式完整性比对基准）",
+   "level": 2,
+   "tags": [
+    "预审",
+    "预算",
+    "验证"
+   ],
+   "chars": 379,
+   "preview": "## 提案模板标准章节（格式完整性比对基准） 0. 标题与标签 / Title & Tags 1. 项目概述 / Project Overview 2. 团队简"
+  },
+  {
+   "id": "spark/rules.md:预审格式检查清单-5-项高频问题",
+   "file": "spark/rules.md",
+   "heading": "预审格式检查清单（5 项高频问题）",
+   "level": 2,
+   "tags": [
+    "通过",
+    "预审",
+    "预算",
+    "验证"
+   ],
+   "chars": 383,
+   "preview": "## 预审格式检查清单（5 项高频问题） | 检查项 | 常见错误 | 通过标准 | |--------|---------|---------| | 1. 核"
+  },
+  {
+   "id": "spark/rules.md:验证方式标准",
+   "file": "spark/rules.md",
+   "heading": "验证方式标准",
+   "level": 2,
+   "tags": [
+    "开发工具",
+    "案例",
+    "节点",
+    "通过",
+    "验证"
+   ],
+   "chars": 183,
+   "preview": "## 验证方式标准 必须可通过**非代码审查**的方式**低成本、可复现**地验证： - Docker 一键测试：`docker compose up` - n"
+  },
+  {
+   "id": "spark/rules.md:结项政策-主帖-section-3-3",
+   "file": "spark/rules.md",
+   "heading": "结项政策（主帖 Section 3.3）",
+   "level": 2,
+   "tags": [
+    "defi",
+    "打款",
+    "案例",
+    "结项",
+    "通过"
+   ],
+   "chars": 356,
+   "preview": "## 结项政策（主帖 Section 3.3） 依据 \"Spark Program: Mini-Grant Initiative\" Section 3.3 （h"
+  },
+  {
+   "id": "spark/rules.md:语言政策-2026-06-起",
+   "file": "spark/rules.md",
+   "heading": "语言政策（2026-06 起）",
+   "level": 2,
+   "tags": [
+    "ai",
+    "预审"
+   ],
+   "chars": 75,
+   "preview": "## 语言政策（2026-06 起） 中英文均可，论坛已接入 AI 智能翻译，不再强制双语版本—— 预审时不得再以\"缺少中文/双语版本\"为由提出意见。"
+  },
+  {
+   "id": "spark/rules.md:项目周期与范围",
+   "file": "spark/rules.md",
+   "heading": "项目周期与范围",
+   "level": 2,
+   "tags": [
+    "ai",
+    "dao",
+    "案例"
+   ],
+   "chars": 124,
+   "preview": "## 项目周期与范围 - 完成周期建议 1-2 个月，聚焦 MVP - 范围过大的提案应建议缩减至可验收的最小闭环（判例：TiKo、NNCBN） - 经济模型过"
+  },
+  {
+   "id": "spark/rules.md:委员会成员",
+   "file": "spark/rules.md",
+   "heading": "委员会成员",
+   "level": 2,
+   "tags": [
+    "教育",
+    "预审"
+   ],
+   "chars": 419,
+   "preview": "## 委员会成员 | 成员 | 角色 | Nervos Talk | Discord | |------|------|-------------|------"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:文件说明",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [
+    "拒绝",
+    "结项",
+    "通过"
+   ],
+   "chars": 153,
+   "preview": "# 文件说明 # 委员会措辞 Skill (Spark Program Committee Phrasing Skill)  > 基于 12 次会议、46 条决"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:一-决议类型定义",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "一、决议类型定义",
+   "level": 2,
+   "tags": [
+    "打款",
+    "拒绝",
+    "结项",
+    "通过",
+    "预审"
+   ],
+   "chars": 317,
+   "preview": "## 一、决议类型定义 | 决议类型 | 含义 | 出现频率 | 典型特征 | |---------|------|---------|---------| |"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:结构模式",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "结构模式",
+   "level": 3,
+   "tags": [],
+   "chars": 61,
+   "preview": "### 结构模式 ``` [开场确认] + [赞扬/肯定] + [具体决议] + [后续建议/要求] + [结尾] ```"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:措辞片段库",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "措辞片段库",
+   "level": 3,
+   "tags": [
+    "ai",
+    "dao",
+    "defi",
+    "教育",
+    "结项",
+    "通过",
+    "预算"
+   ],
+   "chars": 424,
+   "preview": "### 措辞片段库 **开场确认：** - \"通过！\" - \"委员会同意...\" - \"经委员会讨论，一致通过...\"  **赞扬/肯定：** - \"赞扬准时发"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:完整示例",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "完整示例",
+   "level": 3,
+   "tags": [
+    "defi",
+    "通过",
+    "预算"
+   ],
+   "chars": 134,
+   "preview": "### 完整示例 ``` Hi @申请人，  经委员会讨论，一致通过你的 [项目名称] 提案。  赞扬你准时发布周更，委员会表示鼓励。同意支付 [金额]U。  "
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:结构模式",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "结构模式",
+   "level": 3,
+   "tags": [
+    "预审",
+    "预算"
+   ],
+   "chars": 71,
+   "preview": "### 结构模式 ``` [开场认可] + [问题清单] + [整改方向] + [预算调整建议] + [主动帮助/追问] + [结尾] ```"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:措辞片段库",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "措辞片段库",
+   "level": 3,
+   "tags": [
+    "ai",
+    "催更",
+    "教育",
+    "预审",
+    "预算"
+   ],
+   "chars": 625,
+   "preview": "### 措辞片段库 **开场认可：** - \"委员会认可项目想法，认为会是面向开发者的教育工具。\" - \"委员会认为当前产品更像功能演示...\" - \"保持 P"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:完整示例",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "完整示例",
+   "level": 3,
+   "tags": [
+    "教育",
+    "预算"
+   ],
+   "chars": 205,
+   "preview": "### 完整示例 ``` Hi @申请人，  委员会认可你的 [项目名称] 想法，认为会是面向开发者的教育工具。但现有 Demo 不够清晰，委员会目前将该项目保"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:结构模式",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "结构模式",
+   "level": 3,
+   "tags": [],
+   "chars": 66,
+   "preview": "### 结构模式 ``` [肯定价值/热情] + [说明原因] + [替代方向/建议] + [鼓励重提/转向] + [结尾] ```"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:措辞片段库",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "措辞片段库",
+   "level": 3,
+   "tags": [
+    "ai",
+    "dao",
+    "教育"
+   ],
+   "chars": 539,
+   "preview": "### 措辞片段库 **肯定价值/热情：** - \"肯定你的热情，鼓励他做别的方向。\" - \"认同逐步指南是很有价值的。\" - \"赞扬你的努力和付出。\"  **"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:完整示例",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "完整示例",
+   "level": 3,
+   "tags": [
+    "通过"
+   ],
+   "chars": 205,
+   "preview": "### 完整示例 ``` Hi @申请人，  委员会肯定你的热情和对 [领域] 的关注。但经讨论，委员会决定不批准当前 [项目名称] 提案。  原因如下： [具"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:结构模式",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "结构模式",
+   "level": 3,
+   "tags": [],
+   "chars": 43,
+   "preview": "### 结构模式 ``` [直接说明问题] + [建议修炼内功] + [结尾] ```"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:措辞片段库",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "措辞片段库",
+   "level": 3,
+   "tags": [
+    "结项",
+    "验证"
+   ],
+   "chars": 166,
+   "preview": "### 措辞片段库 **直接说明问题：** - \"经过验证，目前项目中的交易处于未能构造成功的状态。\" - \"该项目经过多轮沟通和优化后仍然存在基础的不可用的问"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:完整示例",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "完整示例",
+   "level": 3,
+   "tags": [
+    "验证"
+   ],
+   "chars": 136,
+   "preview": "### 完整示例 ``` Hi @申请人，  经过验证，目前 [项目名称] 中的交易处于未能构造成功的状态。该项目经过多轮沟通和优化后仍然存在基础的不可用的问题"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:结构模式",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "结构模式",
+   "level": 3,
+   "tags": [
+    "结项"
+   ],
+   "chars": 44,
+   "preview": "### 结构模式 ``` [简洁祝贺] + [确认结项] + [可选：后续建议] ```"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:措辞片段库",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "措辞片段库",
+   "level": 3,
+   "tags": [
+    "打款",
+    "结项"
+   ],
+   "chars": 92,
+   "preview": "### 措辞片段库 **简洁祝贺：** - \"顺利结项。\" - \"恭喜 [项目名称] 顺利结项！\"  **确认结项：** - \"委员会确认 [项目名称] 已完成"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:完整示例",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "完整示例",
+   "level": 3,
+   "tags": [
+    "打款",
+    "结项"
+   ],
+   "chars": 95,
+   "preview": "### 完整示例 ``` Hi @申请人，  委员会确认 [项目名称] 已完成所有里程碑，顺利结项。  恭喜！  Best， Spark Program Com"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:开场白",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "开场白",
+   "level": 3,
+   "tags": [],
+   "chars": 75,
+   "preview": "### 开场白 - \"Hi @申请人，我是 Spark Program 的联络员行天春彦。\" - \"Hello @申请人，\" - \"Hi @申请人，\""
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:结尾",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "结尾",
+   "level": 3,
+   "tags": [],
+   "chars": 77,
+   "preview": "### 结尾 - \"Best，\" - \"Best，Spark Program Committee\" - \"Spark Program Committee\""
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:预算相关措辞",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "预算相关措辞",
+   "level": 3,
+   "tags": [
+    "defi",
+    "打款",
+    "拒绝",
+    "通过",
+    "预算"
+   ],
+   "chars": 103,
+   "preview": "### 预算相关措辞 - \"同意支付 [金额]U；\" - \"综合考虑后给到 [金额]U 预算。\" - \"待定时可协商缩减数额；通过后按里程碑支付；拒绝时不予资助"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:技术评审措辞",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "技术评审措辞",
+   "level": 3,
+   "tags": [],
+   "chars": 54,
+   "preview": "### 技术评审措辞 - \"从技术角度，...\" - \"经委员会评审，...\" - \"委员会一致认为...\""
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:主动帮助措辞",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "主动帮助措辞",
+   "level": 3,
+   "tags": [
+    "教育"
+   ],
+   "chars": 96,
+   "preview": "### 主动帮助措辞 - \"如果她需要我们可以提供帮助。\" - \"委托 [委员] 沟通。\" - \"加入测试群，关注测试动向。\" - \"帮他核对；如果...我们自"
+  },
+  {
+   "id": "style/committee_phrasing_skill.md:八-使用说明",
+   "file": "style/committee_phrasing_skill.md",
+   "heading": "八、使用说明",
+   "level": 2,
+   "tags": [
+    "拒绝",
+    "结项",
+    "通过",
+    "预审"
+   ],
+   "chars": 310,
+   "preview": "## 八、使用说明 1. **根据决议类型选择模板**：先确定决议是通过/待定/拒绝/关闭/完成，选择对应模板。 2. **填充片段**：从措辞片段库中选取合适"
+  },
+  {
+   "id": "style/zz_tovarishch.md:文件说明",
+   "file": "style/zz_tovarishch.md",
+   "heading": "文件说明",
+   "level": 3,
+   "tags": [],
+   "chars": 267,
+   "preview": "# 文件说明 # 委员会措辞 Skill — zz_tovarishch 版本 (Hongzhou)  > 基于 2026-08-09 至 2026-08-19"
+  },
+  {
+   "id": "style/zz_tovarishch.md:一-总体风格特征",
+   "file": "style/zz_tovarishch.md",
+   "heading": "一、总体风格特征",
+   "level": 2,
+   "tags": [
+    "ai",
+    "拒绝",
+    "通过",
+    "预审"
+   ],
+   "chars": 573,
+   "preview": "## 一、总体风格特征 1. **简洁凝练**：全篇通常 60–150 英文词，无废话，每个段落只承载一个信息点。 2. **决议前置**：第一句寒暄后立即给出"
+  },
+  {
+   "id": "style/zz_tovarishch.md:二-通用骨架-所有类型共用",
+   "file": "style/zz_tovarishch.md",
+   "heading": "二、通用骨架（所有类型共用）",
+   "level": 2,
+   "tags": [],
+   "chars": 240,
+   "preview": "## 二、通用骨架（所有类型共用） ``` Hi @申请人, [一句感谢/承接] + [委员会决议一句话] [理由或安排：标签化分点 或 1-2 句说明] [下"
+  },
+  {
+   "id": "style/zz_tovarishch.md:高频开场",
+   "file": "style/zz_tovarishch.md",
+   "heading": "高频开场",
+   "level": 3,
+   "tags": [
+    "ai"
+   ],
+   "chars": 391,
+   "preview": "### 高频开场 - \"Hi @name, thank you for submitting the proposal. After evaluation, t"
+  },
+  {
+   "id": "style/zz_tovarishch.md:高频结尾-决议后的出路-鼓励",
+   "file": "style/zz_tovarishch.md",
+   "heading": "高频结尾（决议后的出路/鼓励）",
+   "level": 3,
+   "tags": [
+    "预算"
+   ],
+   "chars": 430,
+   "preview": "### 高频结尾（决议后的出路/鼓励） - \"We encourage you to submit future proposals.\" - \"We encou"
+  },
+  {
+   "id": "style/zz_tovarishch.md:结构",
+   "file": "style/zz_tovarishch.md",
+   "heading": "结构",
+   "level": 3,
+   "tags": [
+    "通过",
+    "预算"
+   ],
+   "chars": 90,
+   "preview": "### 结构 ``` [感谢+批准决议] + [一句话认可项目价值] + [金额 USD→CKB 按现价换算] + [索取收款信息] + [邀请 Monthly"
+  },
+  {
+   "id": "style/zz_tovarishch.md:措辞片段",
+   "file": "style/zz_tovarishch.md",
+   "heading": "措辞片段",
+   "level": 3,
+   "tags": [
+    "ai",
+    "通过",
+    "预算"
+   ],
+   "chars": 619,
+   "preview": "### 措辞片段 - \"the committee has reviewed your revised proposal and decided to appr"
+  },
+  {
+   "id": "style/zz_tovarishch.md:完整示例-zk-lock-2026-08-12",
+   "file": "style/zz_tovarishch.md",
+   "heading": "完整示例（zk-Lock，2026-08-12）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "cell模型",
+    "预算"
+   ],
+   "chars": 776,
+   "preview": "### 完整示例（zk-Lock，2026-08-12） ``` Hi @Mulandi_Cecilia The committee has reviewed "
+  },
+  {
+   "id": "style/zz_tovarishch.md:结构",
+   "file": "style/zz_tovarishch.md",
+   "heading": "结构",
+   "level": 3,
+   "tags": [],
+   "chars": 85,
+   "preview": "### 结构 ``` [感谢+移入 Pending 决议] + [2-3 个具体澄清问题（一段连续提出）] + [可选：一条附赠建议] + [邀请更新后恢复评审"
+  },
+  {
+   "id": "style/zz_tovarishch.md:措辞片段",
+   "file": "style/zz_tovarishch.md",
+   "heading": "措辞片段",
+   "level": 3,
+   "tags": [],
+   "chars": 412,
+   "preview": "### 措辞片段 - \"The committee has moved this application to Pending status and would"
+  },
+  {
+   "id": "style/zz_tovarishch.md:完整示例-spark-verify-2026-08-13",
+   "file": "style/zz_tovarishch.md",
+   "heading": "完整示例（Spark Verify，2026-08-13）",
+   "level": 3,
+   "tags": [
+    "验证"
+   ],
+   "chars": 913,
+   "preview": "### 完整示例（Spark Verify，2026-08-13） ``` Hi @Akane, Thank you for submitting the pr"
+  },
+  {
+   "id": "style/zz_tovarishch.md:五-预算调整-缩减-budget-adjustment",
+   "file": "style/zz_tovarishch.md",
+   "heading": "五、预算调整 / 缩减 (Budget Adjustment)",
+   "level": 2,
+   "tags": [
+    "预算"
+   ],
+   "chars": 34,
+   "preview": "## 五、预算调整 / 缩减 (Budget Adjustment)"
+  },
+  {
+   "id": "style/zz_tovarishch.md:结构",
+   "file": "style/zz_tovarishch.md",
+   "heading": "结构",
+   "level": 3,
+   "tags": [
+    "预算"
+   ],
+   "chars": 67,
+   "preview": "### 结构 ``` [肯定努力] + [划出范围外部分] + [给出调整后金额（USD→CKB）] + [请申请人确认接受] ```"
+  },
+  {
+   "id": "style/zz_tovarishch.md:措辞片段",
+   "file": "style/zz_tovarishch.md",
+   "heading": "措辞片段",
+   "level": 3,
+   "tags": [
+    "ai",
+    "通过",
+    "预算"
+   ],
+   "chars": 415,
+   "preview": "### 措辞片段 - \"The committee commends your initiative and appreciates your effort t"
+  },
+  {
+   "id": "style/zz_tovarishch.md:结构",
+   "file": "style/zz_tovarishch.md",
+   "heading": "结构",
+   "level": 3,
+   "tags": [
+    "打款",
+    "预算"
+   ],
+   "chars": 76,
+   "preview": "### 结构 ``` [肯定进展] + [说明风控原则] + [分期方案：阶段标签 + 百分比 + CKB 金额 + 触发条件] + [请确认] ```"
+  },
+  {
+   "id": "style/zz_tovarishch.md:措辞片段",
+   "file": "style/zz_tovarishch.md",
+   "heading": "措辞片段",
+   "level": 3,
+   "tags": [
+    "ai",
+    "打款",
+    "教育",
+    "结项",
+    "预算",
+    "验证"
+   ],
+   "chars": 696,
+   "preview": "### 措辞片段 - \"our committee must adhere to standard risk-management and milestone-"
+  },
+  {
+   "id": "style/zz_tovarishch.md:结构",
+   "file": "style/zz_tovarishch.md",
+   "heading": "结构",
+   "level": 3,
+   "tags": [
+    "开发工具",
+    "拒绝"
+   ],
+   "chars": 101,
+   "preview": "### 结构 ``` [感谢] + [decline 决议（at this stage / at its current scope）] + [1-2 条标签化"
+  },
+  {
+   "id": "style/zz_tovarishch.md:措辞片段",
+   "file": "style/zz_tovarishch.md",
+   "heading": "措辞片段",
+   "level": 3,
+   "tags": [
+    "ai",
+    "dao",
+    "fiber",
+    "开发工具",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 1570,
+   "preview": "### 措辞片段 **决议句：** - \"After reviewing the details, the committee has decided to d"
+  },
+  {
+   "id": "style/zz_tovarishch.md:完整示例-corven-2026-08-13",
+   "file": "style/zz_tovarishch.md",
+   "heading": "完整示例（Corven，2026-08-13）",
+   "level": 3,
+   "tags": [
+    "ai",
+    "dao",
+    "开发工具",
+    "拒绝",
+    "预算"
+   ],
+   "chars": 883,
+   "preview": "### 完整示例（Corven，2026-08-13） ``` Hi @lestonEth, Thank you for submitting the prop"
+  },
+  {
+   "id": "style/zz_tovarishch.md:八-关闭-终止-closed-terminated",
+   "file": "style/zz_tovarishch.md",
+   "heading": "八、关闭 / 终止 (Closed / Terminated)",
+   "level": 2,
+   "tags": [
+    "结项"
+   ],
+   "chars": 34,
+   "preview": "## 八、关闭 / 终止 (Closed / Terminated)"
+  },
+  {
+   "id": "style/zz_tovarishch.md:结构",
+   "file": "style/zz_tovarishch.md",
+   "heading": "结构",
+   "level": 3,
+   "tags": [
+    "结项"
+   ],
+   "chars": 76,
+   "preview": "### 结构 ``` [承接开场] + [终止决议] + [编号列出 1-2 条具体原因] + [程序性说明（关闭帖子）] + [鼓励继续参与] ```"
+  },
+  {
+   "id": "style/zz_tovarishch.md:措辞片段",
+   "file": "style/zz_tovarishch.md",
+   "heading": "措辞片段",
+   "level": 3,
+   "tags": [
+    "结项",
+    "预算"
+   ],
+   "chars": 825,
+   "preview": "### 措辞片段 - \"However, after careful review and consideration, the committee has d"
+  },
+  {
+   "id": "style/zz_tovarishch.md:九-警告-最终机会-final-warning",
+   "file": "style/zz_tovarishch.md",
+   "heading": "九、警告 / 最终机会 (Final Warning)",
+   "level": 2,
+   "tags": [],
+   "chars": 30,
+   "preview": "## 九、警告 / 最终机会 (Final Warning)"
+  },
+  {
+   "id": "style/zz_tovarishch.md:结构",
+   "file": "style/zz_tovarishch.md",
+   "heading": "结构",
+   "level": 3,
+   "tags": [
+    "结项"
+   ],
+   "chars": 87,
+   "preview": "### 结构 ``` [承接] + [直指核心缺陷（可用 fatal weakness 等重话）] + [说明正确方向] + [给最后一次机会 + 明确不满足则"
+  },
+  {
+   "id": "style/zz_tovarishch.md:措辞片段",
+   "file": "style/zz_tovarishch.md",
+   "heading": "措辞片段",
+   "level": 3,
+   "tags": [
+    "ai"
+   ],
+   "chars": 356,
+   "preview": "### 措辞片段 - \"The committee reviewed your latest update. The methodology contains "
+  },
+  {
+   "id": "style/zz_tovarishch.md:十-使用说明",
+   "file": "style/zz_tovarishch.md",
+   "heading": "十、使用说明",
+   "level": 2,
+   "tags": [
+    "dao",
+    "打款",
+    "拒绝",
+    "结项",
+    "通过",
+    "预审",
+    "预算"
+   ],
+   "chars": 683,
+   "preview": "## 十、使用说明 1. **身份**：以委员会集体身份发言（the committee），签名 \"Hongzhou / On behalf of Spark "
+  }
+ ]
+}
