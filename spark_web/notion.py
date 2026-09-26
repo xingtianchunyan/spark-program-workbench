@@ -153,17 +153,34 @@ class NotionClient:
             self.append_children(created["id"], children[100:])
         return created
 
-    def create_database(self, page_id: str, title: str, properties: dict) -> dict:
+    def create_database(self, page_id: str, title: str, properties: dict,
+                        is_inline: bool | None = None) -> dict:
         """在页面内创建内联数据库（会以 child_database 块出现在页面上）。
 
         新版 API（2025-09+）下顶层 properties 会被忽略，列结构必须放在
-        initial_data_source.properties 里。"""
+        initial_data_source.properties 里。is_inline=True 时随创建请求携带；
+        个别 API 版本不接受创建时携带 is_inline（校验报错），则回退为创建成功后
+        立即 PATCH /databases/{id} 补上。"""
         payload: dict[str, Any] = {
             "parent": {"type": "page_id", "page_id": page_id},
             "title": rich_text(title),
             "initial_data_source": {"properties": properties},
         }
-        return self.request("POST", "/databases", payload, retries=1)
+        if is_inline is None:
+            return self.request("POST", "/databases", payload, retries=1)
+        payload["is_inline"] = is_inline
+        try:
+            return self.request("POST", "/databases", payload, retries=1)
+        except NotionError as exc:
+            if "is_inline" not in str(exc):
+                raise
+            payload.pop("is_inline")
+            db = self.request("POST", "/databases", payload, retries=1)
+            self.request("PATCH", f"/databases/{db['id']}", {"is_inline": is_inline})
+            return db
+
+    def update_database(self, database_id: str, body: dict) -> dict:
+        return self.request("PATCH", f"/databases/{database_id}", body)
 
     def database_data_source_id(self, database_id: str) -> str | None:
         """取数据库第一个数据源的 id（新版 API 中 database id ≠ data source id）。"""

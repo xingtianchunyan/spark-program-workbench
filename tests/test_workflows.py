@@ -90,13 +90,21 @@ class FakeNotion:
         self.pages.pop(page_id, None)
         return {"id": page_id, "archived": True}
 
-    def create_database(self, page_id, title, properties):
+    def create_database(self, page_id, title, properties, is_inline=None):
         db_id = f"db-{1000 + len(self.pages) + getattr(self, 'db_seq', 0)}"
         self.db_seq = getattr(self, "db_seq", 0) + 1
         self.pages[page_id].setdefault("children", []).append(
             {"object": "block", "type": "child_database", "id": db_id,
              "child_database": {"title": title}})
-        return {"id": db_id}
+        self.database_inline = getattr(self, "database_inline", {})
+        self.database_inline[db_id] = is_inline
+        return {"id": db_id, "is_inline": is_inline}
+
+    def update_database(self, database_id, body):
+        self.database_inline = getattr(self, "database_inline", {})
+        if "is_inline" in body:
+            self.database_inline[database_id] = body["is_inline"]
+        return {"id": database_id, **body}
 
     def database_data_source_id(self, database_id):
         return f"ds-{database_id}"
@@ -265,6 +273,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(property_value(fund_rows[0], "类型 / Type"), "提款 Withdrawal")
         adjust_rows = self._inline_rows(page_id, self.auto.ADJUST_DB_TITLE)
         self.assertEqual(len(adjust_rows), 1)
+        # 创建的内联库必须带 is_inline=True
+        inline_dbs = [b for b in self.fake.pages[page_id]["children"]
+                      if b.get("type") == "child_database"]
+        self.assertEqual(len(inline_dbs), 2)
+        for block in inline_dbs:
+            self.assertIs(self.fake.database_inline.get(block["id"]), True, block)
         # transactions 表：金库拨出的首款必须记为提款，即使 AI 给了存款类型
         tx_rows = self.fake.find_title(
             self.auto.ds["transactions"], self.auto.props["transactions"]["title"], "0xabc")

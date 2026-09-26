@@ -365,7 +365,14 @@ class NotionAutomation:
                        for item in body.get("rich_text") or [])
 
     def _create_inline_db(self, page_id: str, title: str, schema: dict) -> str:
-        db = self.notion.create_database(page_id, title, schema)
+        db = self.notion.create_database(page_id, title, schema, is_inline=True)
+        # 双保险：创建请求已带 is_inline=True；个别 API 版本会静默忽略创建时的
+        # 该字段（返回的库 is_inline=False），此时立即 PATCH 补上。
+        try:
+            if db.get("is_inline") is not True:
+                self.notion.update_database(db["id"], {"is_inline": True})
+        except Exception:
+            pass
         # 双保险：即使 initial_data_source 被忽略，也 PATCH 一次列结构
         try:
             ds_id = self.notion.database_data_source_id(db["id"])
