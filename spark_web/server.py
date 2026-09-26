@@ -403,7 +403,13 @@ def refresh_board(actor: str = "local-admin") -> dict:
                     result["errors"].append(f"{topic_id}: {exc}")
             else:
                 project = existing[0]
-                pending = STORE.query("""SELECT j.*,s.status AS step_status FROM sync_jobs j
+                # 刷新幂等：该 topic 的入库作业已核验/被忽略时，绝不再为其排队
+                # in_progress 作业（否则会把用户主动忽略的问题作业重新跑一遍，重复建页）
+                settled = STORE.query(
+                    """SELECT 1 FROM sync_jobs WHERE topic_id=?
+                       AND workflow IN ('in_progress','in-progress')
+                       AND status IN ('verified','core_verified','ignored') LIMIT 1""", (topic_id,))
+                pending = [] if settled else STORE.query("""SELECT j.*,s.status AS step_status FROM sync_jobs j
                     JOIN sync_steps s USING(idempotency_key)
                     WHERE j.topic_id=? AND j.workflow='in_progress'
                       AND s.step IN ('fund_pool','project_list') AND s.status IN ('pending','failed')""", (topic_id,))
@@ -454,14 +460,14 @@ def refresh_board(actor: str = "local-admin") -> dict:
                     STORE.upsert_project(topic_id, title, post.get("url", ""), bucket,
                                          int(post.get("posts_count") or 0))
                     continue
-                if existing[0]["lifecycle"] == bucket:
-                    # lifecycle 可能只是播种时按看板分组写入的；实际结项迁移没跑过就要补跑
-                    done = STORE.query(
-                        """SELECT 1 FROM sync_jobs WHERE topic_id=?
-                           AND workflow IN ('completion','closure')
-                           AND status IN ('verified','core_verified') LIMIT 1""", (topic_id,))
-                    if done:
-                        continue
+                # 刷新幂等：该 topic 的此类作业已核验（迁移跑过）或被用户忽略时，
+                # 不再排队 completion/closure 作业，防止重复建结项页
+                settled = STORE.query(
+                    """SELECT 1 FROM sync_jobs WHERE topic_id=? AND workflow=?
+                       AND status IN ('verified','core_verified','ignored') LIMIT 1""",
+                    (topic_id, bucket))
+                if settled:
+                    continue
                 key = STORE.queue_job(topic_id, bucket)
                 try:
                     topic = fetch_topic(topic_id)
@@ -634,9 +640,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 query = urllib.parse.parse_qs(parsed.query)
+                if (query.get("cached") or [""])[0].lower() in {"1", "true"}:
+                    # 只读缓存：不触发任何链上请求，直接返回上次扫描结果
+                    self.json(200, chain.cached_main())
+                    return
                 limit = _chain_limit(query)
-                result = chain.scan_main(automation().notion, WORKSPACE, chain_rpc(), limit=limit)
+                resume = (query.get("resume") or ["1"])[0].lower() not in {"0", "false", "no"}
+                result = chain.scan_main(automation().notion, WORKSPACE, chain_rpc(),
+                                         limit=limit, resume=resume)
                 result.pop("known_multisig", None)
+                result["updated_at"] = chain.cached_main().get("updated_at")
                 self.json(200, result)
             except chain.ChainError as exc:
                 self.json(502, {"error": f"链上检索失败: {exc}"})
@@ -646,8 +659,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(401, {"error": "请先登录"})
                 return
             try:
-                result = chain.scan_multisig(automation().notion, WORKSPACE, chain_rpc())
-                self.json(200, {"multisig": result})
+                query = urllib.parse.parse_qs(parsed.query)
+                if (query.get("cached") or [""])[0].lower() in {"1", "true"}:
+                    self.json(200, chain.cached_multisig())
+                    return
+                resume = (query.get("resume") or ["1"])[0].lower() not in {"0", "false", "no"}
+                result = chain.scan_multisig(automation().notion, WORKSPACE, chain_rpc(),
+                                             resume=resume)
+                self.json(200, {"multisig": result, "updated_at": chain.cached_multisig().get("updated_at")})
             except chain.ChainError as exc:
                 self.json(502, {"error": f"链上检索失败: {exc}"})
             return

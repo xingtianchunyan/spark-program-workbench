@@ -3,7 +3,9 @@ import unittest
 from pathlib import Path
 
 from spark_web.config import load_workspace_config
-from spark_web.notion import NotionConflict, property_value
+from spark_web.forum import _simplify_project_name
+from spark_web.notion import (NotionConflict, prop_date, prop_select, prop_text, prop_title,
+                              property_value)
 from spark_web.storage import Store
 from spark_web.workflows import NotionAutomation
 
@@ -257,6 +259,97 @@ class WorkflowTests(unittest.TestCase):
                          "https://talk.nervos.org/t/x/90001?u=carol#9")
         self.assertEqual(self.auto._fill_adjustments(page_id, adjustments), [])
         self.assertEqual(len(self._inline_rows(page_id, self.auto.ADJUST_DB_TITLE)), 1)
+
+    # ---- A 组：标题归一化与复用不覆盖 ----
+
+    def test_simplify_project_name_strips_spark_prefixes(self):
+        self.assertEqual(_simplify_project_name("Spark Program | UGMP"), "UGMP")
+        self.assertEqual(_simplify_project_name("Spark Program: WarSpore"), "WarSpore")
+        self.assertEqual(_simplify_project_name("Spark Program｜Nervos Brain"), "Nervos Brain")
+        self.assertEqual(_simplify_project_name("  spark  program  –  Hash This  "), "Hash This")
+        self.assertEqual(_simplify_project_name("Fiber Checkout"), "Fiber Checkout")
+        self.assertEqual(_simplify_project_name(""), "")
+
+    def props_of(self, source):
+        return self.config["properties"][source]
+
+    def _completion_payload(self, project_name):
+        base = self.payload()
+        return {**{k: base[k] for k in ("topic_id", "team", "start_date",
+                                        "wallet", "total_funding", "expected_completion")},
+                "project_name": project_name,
+                "completion_date": "2026-02-27", "funding_amount": "700 CKB",
+                "deliverables": ["https://github.com/x/y/releases/v1"],
+                "final_evaluation": "Accepted", "status": "已完成 / Completed"}
+
+    def test_new_project_normalizes_title_and_adopts_manual_page_without_overwrite(self):
+        op = self.props_of("ongoing_projects")
+        manual = self.fake.create_page(self.config["data_sources"]["ongoing_projects"], {
+            op["title"]: prop_title("Spark Program: Fiber Checkout"),  # 手动页带前缀，精确查找会漏
+            op["team"]: prop_text("Manual Team"),
+            op["wallet"]: prop_text("ckb1manual"),
+            op["start_date"]: prop_date("2026-01-05"),
+            op["expected_completion"]: prop_date("2026-03-01"),
+            op["total_funding"]: prop_text("$1,000 USD"),
+            op["distributed"]: prop_text("50%"),
+        })
+        payload = self.payload()
+        payload["project_name"] = "Spark Program | Fiber Checkout"
+        payload["team"] = "AI Team"
+        result = self.auto.execute_new_project(payload)
+        self.assertTrue(result["adopted_existing_page"])
+        self.assertEqual(result["field_mismatches"].get(op["team"]), "Manual Team")
+        page = self.fake.pages[manual["id"]]
+        self.assertEqual(property_value(page, op["team"]), "Manual Team")  # 已有值绝不覆盖
+        rows = self.fake.query(self.config["data_sources"]["ongoing_projects"])
+        self.assertEqual(len(rows), 1)  # 复用手动页，不重复建页
+
+    def test_completion_normalizes_title_and_adopts_manual_page_without_overwrite(self):
+        cp = self.props_of("completed_projects")
+        manual = self.fake.create_page(self.config["data_sources"]["completed_projects"], {
+            cp["title"]: prop_title("Fiber Checkout"),
+            cp["team"]: prop_text("Manual Team"),
+            cp["wallet"]: prop_text("ckb1manual"),
+            cp["start_date"]: prop_date("2026-01-05"),
+            # completion_date / deliverables 留空 → 应被补齐
+        })
+        result = self.auto.execute_completion(self._completion_payload("Spark Program｜Fiber Checkout"))
+        self.assertTrue(result["adopted_existing_page"])
+        self.assertEqual(result["completed_page_id"], manual["id"])
+        page = self.fake.pages[manual["id"]]
+        self.assertEqual(property_value(page, cp["team"]), "Manual Team")  # 不覆盖
+        self.assertEqual(property_value(page, cp["completion_date"]), "2026-02-27")  # 空字段补齐
+        self.assertEqual(property_value(page, cp["deliverables"]),
+                         "https://github.com/x/y/releases/v1")
+        self.assertEqual(result["field_mismatches"].get(cp["team"]), "Manual Team")
+        self.assertEqual(result["field_mismatches"].get(cp["wallet"]), "ckb1manual")
+        self.assertEqual(len(self.fake.query(self.config["data_sources"]["completed_projects"])), 1)
+        # 手动页不克隆重建，只追加「结项评价」小节
+        types = [b.get("type") for b in page["children"]]
+        self.assertIn("heading_2", types)
+
+    def test_completion_conflicts_on_multiple_normalized_matches(self):
+        cp = self.props_of("completed_projects")
+        for title in ("Spark Program | UGMP", "ugmp"):
+            self.fake.create_page(self.config["data_sources"]["completed_projects"],
+                                  {cp["title"]: prop_title(title)})
+        with self.assertRaises(NotionConflict):
+            self.auto.execute_completion(self._completion_payload("Spark Program: UGMP"))
+        self.assertEqual(len(self.fake.query(self.config["data_sources"]["completed_projects"])), 2)
+
+    def test_completion_adopted_page_appends_evaluation_only_once(self):
+        cp = self.props_of("completed_projects")
+        self.fake.create_page(self.config["data_sources"]["completed_projects"], {
+            cp["title"]: prop_title("Fiber Checkout"),
+            cp["team"]: prop_text("Manual Team"),
+        })
+        first = self.auto.execute_completion(self._completion_payload("Spark Program | Fiber Checkout"))
+        second = self.auto.execute_completion(self._completion_payload("Spark Program | Fiber Checkout"))
+        self.assertEqual(first["completed_page_id"], second["completed_page_id"])
+        page = self.fake.pages[first["completed_page_id"]]
+        headings = [b for b in page["children"]
+                    if b.get("type") == "heading_2" and "结项评价" in self.auto._block_text(b)]
+        self.assertEqual(len(headings), 1)  # 重复执行不重复追加评价小节
 
     def test_new_project_fills_inline_dbs_and_first_disbursement_is_withdrawal(self):
         payload = self.payload()

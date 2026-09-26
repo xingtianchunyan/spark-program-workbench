@@ -264,5 +264,127 @@ class ApplyMainTests(unittest.TestCase):
         self.assertEqual(result["missing"], [])
 
 
+class _FakeScanRPC:
+    """假链上 RPC：get_transactions 返回预置 grouped 列表（区块倒序），
+    get_block_timestamp 按请求顺序给出时间戳；记录实际拉过详情的交易以验证断点停止。"""
+
+    def __init__(self, grouped, outputs, timestamps):
+        self.grouped = grouped
+        self.outputs = outputs
+        self._timestamps = iter(timestamps)
+        self.fetched = []
+
+    def get_transactions(self, lock):
+        return list(self.grouped)
+
+    def get_transaction(self, tx_hash):
+        self.fetched.append(tx_hash)
+        return {"transaction": {"outputs": self.outputs[tx_hash], "inputs": []},
+                "tx_status": {"block_hash": "0x" + "00" * 32}}
+
+    def get_block_timestamp(self, block_hash):
+        return next(self._timestamps)
+
+
+class ScanCacheTests(unittest.TestCase):
+    """B 组：扫描结果持久化 + 断点续查合并（全部假 RPC 数据，不走真实网络）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cache_path = Path(self.tmp.name) / "chain_scan_cache.json"
+        self.fake = FakeNotion()
+        self.config = load_workspace_config()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _main_rpc(self, hashes):
+        grouped = [{"tx_hash": h, "cells": [["input", 0], ["output", 2]]} for h in hashes]
+        outputs = {h: [{"lock": OTHER_LOCK, "capacity": shannon(100)},
+                       {"lock": OTHER_LOCK, "capacity": shannon(50)},
+                       {"lock": MAIN_LOCK, "capacity": shannon(400)}] for h in hashes}
+        return _FakeScanRPC(grouped, outputs, [TS + i for i in range(len(hashes))])
+
+    def test_cache_roundtrip_and_empty_views(self):
+        self.assertEqual(chain.load_scan_cache(self.cache_path), {"main": None, "multisig": None})
+        self.assertFalse(chain.cached_main(self.cache_path)["cached"])
+        self.assertFalse(chain.cached_multisig(self.cache_path)["cached"])
+        chain.save_scan_cache({"main": {"updated_at": "t", "records": []}, "multisig": None},
+                              self.cache_path)
+        self.assertEqual(chain.load_scan_cache(self.cache_path)["main"]["updated_at"], "t")
+
+    def test_scan_main_persists_cache_and_resumes_incrementally(self):
+        rpc1 = self._main_rpc(["0xA", "0xB"])
+        first = chain.scan_main(self.fake, self.config, rpc1, cache_path=self.cache_path)
+        self.assertEqual(first["scanned"], 2)
+        self.assertEqual([r["tx_hash"] for r in first["missing"]], ["0xA", "0xB"])
+        cached = chain.cached_main(self.cache_path)
+        self.assertTrue(cached["cached"])
+        self.assertIsNotNone(cached["updated_at"])
+        self.assertEqual(len(cached["missing"]), 2)
+        self.assertEqual(cached["cursor"]["last_tx_hash"], "0xB")  # 最旧一条作为续查游标
+        self.assertTrue(self.cache_path.exists())
+        # 断点续查：链上倒序出现新交易 0xC，遇到已缓存的 0xA 即停，不重复拉 0xB
+        rpc2 = self._main_rpc(["0xC", "0xA", "0xB"])
+        second = chain.scan_main(self.fake, self.config, rpc2, cache_path=self.cache_path)
+        self.assertEqual(rpc2.fetched, ["0xC"])
+        self.assertEqual(second["scanned"], 3)  # 新交易与缓存合并后统一对照
+        self.assertEqual([r["tx_hash"] for r in second["missing"]], ["0xC", "0xA", "0xB"])
+        again = chain.cached_main(self.cache_path)
+        self.assertEqual(len(again["missing"]), 3)
+        self.assertEqual(again["cursor"]["last_tx_hash"], "0xB")
+
+    def test_scan_main_resume_false_ignores_cache(self):
+        rpc1 = self._main_rpc(["0xA"])
+        chain.scan_main(self.fake, self.config, rpc1, cache_path=self.cache_path)
+        rpc2 = self._main_rpc(["0xD"])
+        second = chain.scan_main(self.fake, self.config, rpc2, resume=False,
+                                 cache_path=self.cache_path)
+        self.assertEqual(second["scanned"], 1)
+        self.assertEqual([r["tx_hash"] for r in second["missing"]], ["0xD"])
+
+    def _multisig_rpc(self, hashes):
+        grouped = [{"tx_hash": h, "cells": [["input", 0]]} for h in hashes]
+        outputs = {h: [{"lock": SENDER_LOCK, "capacity": shannon(80)}] for h in hashes}
+        return _FakeScanRPC(grouped, outputs, [TS + i for i in range(len(hashes))])
+
+    def test_scan_multisig_merges_cached_rows_on_resume(self):
+        op = self.config["properties"]["ongoing_projects"]
+        self.fake.create_page(self.config["data_sources"]["ongoing_projects"], {
+            op["title"]: prop_title("Example"),
+            op["wallet"]: prop_text(OTHER_ADDRESS),
+        })
+        main_records = [{"direction": "out", "counterparty_address": OTHER_ADDRESS}]
+        rpc1 = self._multisig_rpc(["0xM1"])
+        first = chain.scan_multisig(self.fake, self.config, rpc1,
+                                    main_records=main_records, cache_path=self.cache_path)
+        self.assertEqual([r["tx_hash"] for r in first[0]["rows"]], ["0xM1"])
+        # 续查：链上倒序新增 0xM2，遇到缓存的 0xM1 即停，合并后两行都在
+        rpc2 = self._multisig_rpc(["0xM2", "0xM1"])
+        second = chain.scan_multisig(self.fake, self.config, rpc2,
+                                     main_records=main_records, cache_path=self.cache_path)
+        self.assertEqual(rpc2.fetched, ["0xM2"])
+        self.assertEqual([r["tx_hash"] for r in second[0]["rows"]], ["0xM2", "0xM1"])
+        cached = chain.cached_multisig(self.cache_path)
+        self.assertTrue(cached["cached"])
+        self.assertIsNotNone(cached["updated_at"])
+        self.assertEqual(len(cached["multisig"][0]["rows"]), 2)
+
+    def test_scan_multisig_resume_false_ignores_cache(self):
+        op = self.config["properties"]["ongoing_projects"]
+        self.fake.create_page(self.config["data_sources"]["ongoing_projects"], {
+            op["title"]: prop_title("Example"),
+            op["wallet"]: prop_text(OTHER_ADDRESS),
+        })
+        main_records = [{"direction": "out", "counterparty_address": OTHER_ADDRESS}]
+        rpc1 = self._multisig_rpc(["0xM1"])
+        chain.scan_multisig(self.fake, self.config, rpc1,
+                            main_records=main_records, cache_path=self.cache_path)
+        rpc2 = self._multisig_rpc(["0xM9"])
+        second = chain.scan_multisig(self.fake, self.config, rpc2, resume=False,
+                                     main_records=main_records, cache_path=self.cache_path)
+        self.assertEqual([r["tx_hash"] for r in second[0]["rows"]], ["0xM9"])
+
+
 if __name__ == "__main__":
     unittest.main()

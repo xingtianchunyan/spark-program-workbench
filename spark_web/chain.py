@@ -19,7 +19,10 @@ import re
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
+
+from .config import ROOT
 
 
 MAIN_WALLET_ADDRESS = (
@@ -54,6 +57,59 @@ FUND_COL_PURPOSE = "用途 / Purpose"
 
 ADDRESS_RE = re.compile(r"\b(?:ckb1|ckt1)[02-9ac-hj-np-z02-9ac-hj-np-z1l]{20,}\b")
 BEIJING_TZ = dt.timezone(dt.timedelta(hours=8))
+
+# 链上扫描结果缓存（含每条 tx 完整字段、游标、时间戳）；已加入 .gitignore
+SCAN_CACHE_PATH = ROOT / "chain_scan_cache.json"
+
+
+def _utcnow_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def _resolve_cache_path(cache_path: Any = None) -> Path:
+    return Path(cache_path) if cache_path else SCAN_CACHE_PATH
+
+
+def load_scan_cache(cache_path: Any = None) -> dict:
+    """读取扫描缓存；文件缺失或损坏时返回空结构（不抛异常）。"""
+    path = _resolve_cache_path(cache_path)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, dict):
+            return value
+    except Exception:
+        pass
+    return {"main": None, "multisig": None}
+
+
+def save_scan_cache(cache: dict, cache_path: Any = None) -> None:
+    """原子写入扫描缓存（tmp + replace），避免中途断电留下半截 JSON。"""
+    path = _resolve_cache_path(cache_path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
+def cached_main(cache_path: Any = None) -> dict:
+    """主钱包扫描缓存的只读视图（供「显示上次结果」按钮使用，不触发链上请求）。"""
+    entry = load_scan_cache(cache_path).get("main")
+    if not entry:
+        return {"cached": False, "updated_at": None, "cursor": None, "scanned": 0,
+                "missing": [], "mismatched": [], "extra": []}
+    return {"cached": True, "updated_at": entry.get("updated_at"),
+            "cursor": entry.get("cursor"), "scanned": entry.get("scanned", 0),
+            "missing": entry.get("result", {}).get("missing", []),
+            "mismatched": entry.get("result", {}).get("mismatched", []),
+            "extra": entry.get("result", {}).get("extra", [])}
+
+
+def cached_multisig(cache_path: Any = None) -> dict:
+    """多签扫描缓存的只读视图。"""
+    entry = load_scan_cache(cache_path).get("multisig")
+    if not entry:
+        return {"cached": False, "updated_at": None, "multisig": []}
+    return {"cached": True, "updated_at": entry.get("updated_at"),
+            "multisig": entry.get("items", [])}
 
 
 class ChainError(RuntimeError):
@@ -553,15 +609,24 @@ def tx_purpose(record: dict, known_projects: dict[str, str]) -> str:
 # ---------------------------------------------------------------------------
 
 def fetch_main_wallet_records(rpc: ChainRPC, main_address: str = MAIN_WALLET_ADDRESS,
-                              limit: int = 500) -> list[dict]:
-    """拉主钱包全量交易 → classify 记录（最多 limit 条，按时间倒序）。"""
+                              limit: int = 500,
+                              stop_hashes: set[str] | None = None) -> list[dict]:
+    """拉主钱包交易 → classify 记录（最多 limit 条，按时间倒序）。
+
+    stop_hashes（断点续查）：indexer 按区块倒序返回，遇到已缓存的 tx_hash 即停止，
+    调用方把上次缓存的哈希集合传进来即可只增量拉新交易。"""
     main_lock = decode_address(main_address)
     grouped = rpc.get_transactions(main_lock)
     txs: list[dict] = []
-    for item in grouped[:max(1, int(limit))]:
+    cap = max(1, int(limit))
+    for item in grouped:
+        if len(txs) >= cap:
+            break
         tx_hash = item.get("tx_hash")
         if not tx_hash:
             continue
+        if stop_hashes and tx_hash in stop_hashes:
+            break  # 已从上次扫描缓存，后续更旧的交易不必再拉
         detail = rpc.get_transaction(tx_hash)
         transaction = detail.get("transaction") or {}
         cells = item.get("cells") or []
@@ -582,8 +647,11 @@ def fetch_main_wallet_records(rpc: ChainRPC, main_address: str = MAIN_WALLET_ADD
     return classify_main_wallet_txs(txs, main_lock, rpc=rpc)
 
 
-def fetch_multisig_records(rpc: ChainRPC, address: str) -> list[dict]:
-    """拉某个多签钱包的交易，只保留「划出到非主钱包地址」的提款记录。"""
+def fetch_multisig_records(rpc: ChainRPC, address: str,
+                           stop_hashes: set[str] | None = None) -> list[dict]:
+    """拉某个多签钱包的交易，只保留「划出到非主钱包地址」的提款记录。
+
+    stop_hashes（断点续查）：遇到已缓存的 tx_hash 即停止。"""
     lock = decode_address(address)
     main_lock = decode_address(MAIN_WALLET_ADDRESS)
     grouped = rpc.get_transactions(lock)
@@ -592,6 +660,8 @@ def fetch_multisig_records(rpc: ChainRPC, address: str) -> list[dict]:
         tx_hash = item.get("tx_hash")
         if not tx_hash:
             continue
+        if stop_hashes and tx_hash in stop_hashes:
+            break  # 已从上次扫描缓存，后续更旧的交易不必再拉
         detail = rpc.get_transaction(tx_hash)
         transaction = detail.get("transaction") or {}
         cells = item.get("cells") or []
@@ -707,12 +777,29 @@ def read_project_wallets(notion: Any, config: dict) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def scan_main(notion: Any, config: dict, rpc: ChainRPC | None = None,
-              records: list[dict] | None = None, limit: int = 500) -> dict:
-    """对照链上与 transactions 表：missing / mismatched / extra（不落库）。"""
-    if records is None:
+              records: list[dict] | None = None, limit: int = 500,
+              resume: bool = True, cache_path: Any = None) -> dict:
+    """对照链上与 transactions 表：missing / mismatched / extra（不写 Notion）。
+
+    结果持久化到扫描缓存（chain_scan_cache.json）：缓存记录每条 tx 的完整字段、
+    扫描游标（最旧一条的 tx_hash/日期）与时间戳。resume=True（默认）时断点续查——
+    链上只增量拉取新交易，与缓存合并后统一对照当前 Notion 表（增量交易的
+    missing/mismatched 状态都是本次现算的，不会拿过期结论糊弄）。"""
+    fetched = records is None
+    if fetched:
         if rpc is None:
             raise ChainError("scan_main 需要 rpc 或 records 之一")
-        records = fetch_main_wallet_records(rpc, limit=limit)
+        cache = load_scan_cache(cache_path)
+        entry = cache.get("main") or {}
+        prev_records = entry.get("records") or []
+        stop = {r.get("tx_hash") for r in prev_records if r.get("tx_hash")} if resume else None
+        fresh = fetch_main_wallet_records(rpc, limit=limit, stop_hashes=stop)
+        if resume:
+            # 合并：新交易在前（indexer 倒序，新的更旧之前的都是增量），缓存去重殿后
+            fresh_hashes = {r.get("tx_hash") for r in fresh}
+            records = fresh + [r for r in prev_records if r.get("tx_hash") not in fresh_hashes]
+        else:
+            records = fresh  # 全量重扫：丢弃缓存，重新建立游标
     existing = read_transactions_rows(notion, config)
     known_projects = read_project_wallets(notion, config)
 
@@ -745,8 +832,26 @@ def scan_main(notion: Any, config: dict, rpc: ChainRPC | None = None,
                 row["diffs"] = diffs
                 mismatched.append(row)
     extra = [row for tx_hash, row in existing.items() if tx_hash not in seen]
-    return {"missing": missing, "mismatched": mismatched, "extra": extra,
-            "scanned": len(seen), "known_multisig": known_projects}
+    result = {"missing": missing, "mismatched": mismatched, "extra": extra,
+              "scanned": len(seen), "known_multisig": known_projects}
+    if fetched:
+        # 持久化完整扫描状态（records 为 classify 后的完整字段），供下次断点续查与
+        # 「显示上次结果」只读渲染；records 由调用方传入时不触碰缓存
+        cursor = None
+        if records:
+            last = records[-1]
+            cursor = {"last_tx_hash": last.get("tx_hash") or "",
+                      "last_date": beijing_date(last.get("date")) or None}
+        cache = load_scan_cache(cache_path)
+        cache["main"] = {"updated_at": _utcnow_iso(), "cursor": cursor,
+                         "records": records,
+                         "result": {"missing": missing, "mismatched": mismatched,
+                                    "extra": extra, "scanned": len(seen)}}
+        try:
+            save_scan_cache(cache, cache_path)
+        except OSError:
+            pass  # 缓存失败不阻断扫描结果返回
+    return result
 
 
 def _tx_properties(config: dict, row: dict) -> dict:
@@ -883,15 +988,22 @@ def _multisig_pages(notion: Any, config: dict) -> dict[str, dict]:
 
 
 def scan_multisig(notion: Any, config: dict, rpc: ChainRPC,
-                  main_records: list[dict] | None = None) -> list[dict]:
+                  main_records: list[dict] | None = None,
+                  resume: bool = True, cache_path: Any = None) -> list[dict]:
     """对每个已知项目多签拉交易，只保留划出到非主钱包地址的提款，
-    按 (日期, 金额) 对照各项目页「资金使用情况」内联库去重（不落库）。"""
+    按 (日期, 金额) 对照各项目页「资金使用情况」内联库去重（不写 Notion）。
+
+    结果持久化到扫描缓存；resume=True（默认）时断点续查——每个多签只增量拉取
+    缓存游标之后的新交易，遇到已缓存的 tx_hash 即停止，再与缓存行合并。"""
     if main_records is None:
         main_records = fetch_main_wallet_records(rpc)
     # 条件①：主钱包历史流出交易的对手方；条件②：Notion 项目中出现的地址
     main_counterparties = {r.get("counterparty_address") for r in main_records
                            if r.get("direction") == "out" and r.get("counterparty_address")}
     pages = _multisig_pages(notion, config)
+    cache = load_scan_cache(cache_path)
+    prev_items = {item.get("multisig"): item
+                  for item in (cache.get("multisig") or {}).get("items", []) if item.get("multisig")}
     results = []
     for address, info in sorted(pages.items()):
         if address not in main_counterparties:
@@ -903,8 +1015,12 @@ def scan_multisig(notion: Any, config: dict, rpc: ChainRPC,
                        str(_page_property(row, FUND_COL_AMOUNT) or "").strip())
                 if any(key):
                     existing_keys.add(key)
-        records = fetch_multisig_records(rpc, address)
+        prev = prev_items.get(address)
+        stop = {r.get("tx_hash") for r in prev.get("rows") or [] if r.get("tx_hash")} \
+            if (resume and prev) else None
+        records = fetch_multisig_records(rpc, address, stop_hashes=stop)
         rows = []
+        seen_hashes = set()
         for record in records:
             if record.get("to_main"):
                 continue  # 退回主钱包的钱由主钱包侧记录，不进项目页提款
@@ -917,9 +1033,23 @@ def scan_multisig(notion: Any, config: dict, rpc: ChainRPC,
                 "amount": key[1],
                 "counterparty_address": record.get("counterparty_address") or "",
             })
+            seen_hashes.add(record["tx_hash"])
+        if resume and prev:
+            # 合并缓存行：已被新扫描覆盖的、或期间已写进内联库的（按 日期+金额 命中）丢弃
+            for row in prev.get("rows") or []:
+                if row.get("tx_hash") in seen_hashes:
+                    continue
+                if (row.get("date"), row.get("amount")) in existing_keys:
+                    continue
+                rows.append(row)
         results.append({"multisig": address, "project": info["project"],
                         "page_id": info["page_id"], "source": info["source"],
                         "rows": rows, "existing": len(existing_keys)})
+    cache["multisig"] = {"updated_at": _utcnow_iso(), "items": results}
+    try:
+        save_scan_cache(cache, cache_path)
+    except OSError:
+        pass  # 缓存失败不阻断扫描结果返回
     return results
 
 

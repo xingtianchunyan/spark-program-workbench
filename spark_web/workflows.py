@@ -8,6 +8,7 @@ from .notion import (
     cloneable_block, divider, heading, paragraph, prop_date, prop_select, prop_text, prop_title,
     property_value, values_match,
 )
+from .forum import _simplify_project_name
 from .storage import Store, checksum, utcnow
 import re
 
@@ -109,9 +110,16 @@ class NotionAutomation:
 
     @staticmethod
     def _norm_title(value: str) -> str:
-        import re
-        v = re.sub(r"^spark\s*program\s*[|｜\-–—:：]\s*", "", (value or "").strip(), flags=re.I)
-        return re.sub(r"\s+", " ", v).casefold()
+        """匹配用归一化标题：简化项目名（去 Spark Program 前缀）后忽略大小写。"""
+        return _simplify_project_name(value).casefold()
+
+    @staticmethod
+    def _normalize_payload_name(payload: dict) -> dict:
+        """写入入口统一归一化项目名（防「Spark Program | xxx」前缀导致重复建页）。
+        返回副本，不改动调用方原字典。"""
+        normalized = dict(payload)
+        normalized["project_name"] = _simplify_project_name(payload.get("project_name") or "")
+        return normalized
 
     def reconcile_notion(self, actor: str = "system") -> dict:
         """对账四个 Notion 表单与本地项目库：拉取各表现有行，按规范化标题匹配，
@@ -188,6 +196,7 @@ class NotionAutomation:
         }
 
     def execute_new_project(self, payload: dict, actor: str = "system") -> dict:
+        payload = self._normalize_payload_name(payload)
         require_fields(payload, REQUIRED_NEW_PROJECT)
         topic_id = str(payload["topic_id"])
         key = self.store.queue_job(topic_id, "in_progress", payload)
@@ -558,6 +567,60 @@ class NotionAutomation:
         ]
         return head, middle, tail
 
+    def _find_pages_by_norm_title(self, source_key: str, project_name: str) -> list[dict]:
+        """按归一化标题精确匹配某张表（大小写不敏感、忽略多余空格、去 Spark Program
+        前缀）查找项目页；按页面 id 去重（同一页面可能因视图重复返回）。"""
+        wanted = self._norm_title(project_name)
+        title_prop = self.props[source_key]["title"]
+        seen, unique = set(), []
+        for row in self.notion.query(self.ds[source_key]):
+            if self._norm_title(property_value(row, title_prop) or "") != wanted:
+                continue
+            if row["id"] not in seen:
+                seen.add(row["id"])
+                unique.append(row)
+        return unique
+
+    def _adopt_completed_page(self, page: dict, payload: dict) -> tuple[dict, dict]:
+        """复用手动维护的已完成项目页：只回填空字段，绝不覆盖已有值；差异记入返回的
+        mismatches 供调用方报告（与 _adopt_project_page 同一套人工数据优先原则）。"""
+        cp = self.props["completed_projects"]
+        deliverables = payload.get("deliverables") or []
+        expected = {
+            cp["team"]: payload["team"],
+            cp["start_date"]: payload["start_date"],
+            cp["completion_date"]: payload["completion_date"],
+            cp["funding_amount"]: payload["funding_amount"],
+            cp["wallet"]: payload["wallet"],
+            cp["deliverables"]: (deliverables + [""])[0],
+            cp["deliverables_2"]: deliverables[1] if len(deliverables) > 1 else "",
+            cp["total_funding"]: payload["total_funding"],
+            cp["status"]: payload["status"],
+            cp["expected_completion"]: payload["expected_completion"],
+        }
+        wanted = {
+            cp["team"]: prop_text(payload["team"]),
+            cp["start_date"]: prop_date(payload["start_date"]),
+            cp["completion_date"]: prop_date(payload["completion_date"]),
+            cp["funding_amount"]: prop_text(payload["funding_amount"]),
+            cp["wallet"]: prop_text(payload["wallet"]),
+            cp["deliverables"]: prop_text(expected[cp["deliverables"]]),
+            cp["deliverables_2"]: prop_text(expected[cp["deliverables_2"]]),
+            cp["total_funding"]: prop_text(payload["total_funding"]),
+            cp["status"]: prop_select(payload["status"]),
+            cp["expected_completion"]: prop_date(payload["expected_completion"]),
+        }
+        updates, mismatches = {}, {}
+        for name, prop in wanted.items():
+            actual = property_value(page, name)
+            if actual in (None, ""):
+                updates[name] = prop
+            elif not values_match(expected[name], actual):
+                mismatches[name] = actual
+        if updates:
+            page = self.notion.update_page(page["id"], updates)
+        return page, mismatches
+
     def _find_existing_project_page(self, project_name: str) -> list[dict]:
         """模糊匹配进行中项目表里可能已存在的项目页（防止重复建页）。
 
@@ -749,6 +812,7 @@ class NotionAutomation:
             raise
 
     def execute_completion(self, payload: dict, actor: str = "system") -> dict:
+        payload = self._normalize_payload_name(payload)
         require_fields(payload, ("topic_id", "project_name", "team", "start_date", "completion_date",
                                  "funding_amount", "wallet", "total_funding", "expected_completion", "status"))
         topic_id = str(payload["topic_id"])
@@ -780,18 +844,25 @@ class NotionAutomation:
             cp["expected_completion"]: prop_date(payload["expected_completion"]),
         }
         try:
-            existing = self.notion.find_title(self.ds["completed_projects"], cp["title"], payload["project_name"])
-            if len(existing) > 1:
-                raise NotionConflict("已完成项目表中存在多个同名项目")
-            if existing:
-                assert_properties(existing[0], expected)
-                completed = existing[0]
+            matches = self._find_pages_by_norm_title("completed_projects", payload["project_name"])
+            if len(matches) > 1:
+                raise NotionConflict("已完成项目表中存在多个同名项目，请先人工合并："
+                                     + ", ".join(str(m.get("url", "")) for m in matches))
+            ours = self.store.get_external("notion", "completed_project", f"topic:{topic_id}")
+            adopted = False
+            field_mismatches: dict = {}
+            if matches:
+                completed = matches[0]
+                if ours and ours.get("remote_id") == completed["id"]:
+                    # 本工作流自己建/管的页：保持原有严格校验（属性不一致即冲突，需人工核对）
+                    assert_properties(completed, expected)
+                else:
+                    # 手动维护的页：只补空字段，已有值绝不覆盖；差异只记录不阻断
+                    completed, field_mismatches = self._adopt_completed_page(completed, payload)
+                    adopted = True
             else:
                 completed = self.notion.create_page(self.ds["completed_projects"], properties, None, "✅")
                 assert_properties(self.notion.retrieve_page(completed["id"]), expected)
-            source_blocks = self.notion.list_children(ongoing_id, recursive=True) if ongoing_id else []
-            cloned = [cloneable_block(block) for block in source_blocks]
-            cloned = [block for block in cloned if block]
             # 结项评价优先用委员会结项公告楼层原文（completion_post_text，忠实不改写）；
             # 没有原文时退回 AI 摘要 final_evaluation。
             evaluation = (payload.get("completion_post_text") or "").strip() \
@@ -801,11 +872,20 @@ class NotionAutomation:
                 evaluation_blocks.append(
                     paragraph("来源 / Source: " + payload["completion_post_url"],
                               link=payload["completion_post_url"]))
-            cloned += [divider(), heading(2, "结项评价 / Final Evaluation")] + evaluation_blocks
-            self._ensure_page_content(completed["id"], cloned)
-            # 克隆源页内容不含内联数据库（API 不支持复制 child_database），
-            # 与 execute_new_project 保持一致，此处单独补建。
-            self._ensure_inline_databases(completed["id"], fund=True, adjust=True)
+            if adopted:
+                # 手动维护页：不克隆、不重建内容，只在末尾补「结项评价」小节（缺了才补）
+                self._append_sequence_once(
+                    completed["id"],
+                    [divider(), heading(2, "结项评价 / Final Evaluation")] + evaluation_blocks)
+            else:
+                source_blocks = self.notion.list_children(ongoing_id, recursive=True) if ongoing_id else []
+                cloned = [cloneable_block(block) for block in source_blocks]
+                cloned = [block for block in cloned if block]
+                cloned += [divider(), heading(2, "结项评价 / Final Evaluation")] + evaluation_blocks
+                self._ensure_page_content(completed["id"], cloned)
+                # 克隆源页内容不含内联数据库（API 不支持复制 child_database），
+                # 与 execute_new_project 保持一致，此处单独补建。
+                self._ensure_inline_databases(completed["id"], fund=True, adjust=True)
             op = self.props["ongoing_projects"]
             ongoing_status = self.select["completed"]
             if ongoing_id:
@@ -814,15 +894,22 @@ class NotionAutomation:
             allocations = self.notion.find_title(self.ds["fund_allocations"], fp["title"], payload["project_name"])
             for allocation in allocations:
                 self.notion.update_page(allocation["id"], {fp["status"]: prop_select(self.select["completed"])})
-            self.store.record_external("notion", "completed_project", f"topic:{topic_id}",
-                                       completed["id"], checksum(expected))
+            # 只给「本工作流自建」的页登记外部记录：复用的手动页保持匿名，
+            # 下次执行仍走 adopt 路径（幂等：空字段已补齐、评价小节已存在，均不重复操作）
+            if not adopted:
+                self.store.record_external("notion", "completed_project", f"topic:{topic_id}",
+                                           completed["id"], checksum(expected))
             self.store.set_step(key, "completion", "verified", [completed["id"]], value_checksum=checksum(payload))
             with self.store.transaction() as conn:
                 conn.execute("UPDATE projects SET lifecycle=?,updated_at=? WHERE topic_id=?",
                              ("closure" if workflow == "closure" else "completion", utcnow(), topic_id))
             self.store.audit(actor, "notion_completion_verified", key,
-                             {"completed_page_id": completed["id"], "ongoing_page_id": ongoing_id})
-            return {"status": "verified", "completed_page_id": completed["id"]}
+                             {"completed_page_id": completed["id"], "ongoing_page_id": ongoing_id,
+                              "adopted_existing_page": adopted,
+                              "field_mismatches": field_mismatches})
+            return {"status": "verified", "completed_page_id": completed["id"],
+                    "adopted_existing_page": adopted,
+                    "field_mismatches": field_mismatches or None}
         except NotionConflict as exc:
             self.store.set_step(key, "completion", "conflict", [], str(exc))
             raise

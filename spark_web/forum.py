@@ -14,6 +14,13 @@ from .config import setting
 TALK_ORIGIN = "https://talk.nervos.org"
 
 
+def _simplify_project_name(value: str) -> str:
+    """提取/写入共用的项目名归一化：去掉「Spark Program | / : / ｜ / -」等前缀，
+    压缩多余空白并去首尾空格；保留原始大小写（展示用），匹配侧再自行 casefold。"""
+    name = re.sub(r"^spark\s*program\s*[|｜:：\-–—]\s*", "", (value or "").strip(), flags=re.I)
+    return re.sub(r"\s+", " ", name).strip()
+
+
 def _request_json(url: str, *, method: str = "GET", payload: dict | None = None,
                   headers: dict | None = None, timeout: int = 30) -> dict:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -157,6 +164,7 @@ proposal_url={TALK_ORIGIN}/t/{topic.get('slug','')}/{topic.get('id')}
 帖子：{json.dumps(posts, ensure_ascii=False)[:50000]}"""
     value = ai_json(prompt)
     value["topic_id"] = str(topic.get("id"))
+    value["project_name"] = _simplify_project_name(value.get("project_name") or "")
     value.setdefault("proposal_url", f"{TALK_ORIGIN}/t/{topic.get('slug','')}/{topic.get('id')}")
     if value.get("wallet"):
         value["wallet"] = value["wallet"].lower()
@@ -214,6 +222,7 @@ completion_post_url 必须是委员会发布的结项/关停公告所在楼层�
                 value["completion_post_text"] = posts[-1].get("text", "")
     value.update({k: base.get(k, "") for k in (
         "topic_id", "project_name", "team", "start_date", "wallet", "total_funding", "expected_completion")})
+    value["project_name"] = _simplify_project_name(value.get("project_name") or "")
     if not value.get("funding_amount") and base.get("total_funding"):
         value["funding_amount"] = base["total_funding"]
     value["status"] = status

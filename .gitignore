@@ -14,3 +14,4 @@ spark_task_data.before_web.json
 node_modules/
 launch-web.runtime
 spark_project_cache.json
+chain_scan_cache.json

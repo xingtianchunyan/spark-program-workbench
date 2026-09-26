@@ -69,6 +69,77 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(set(result["transitions"]), {"10212", "10385"})
         self.assertFalse(result["errors"])
 
+    def _run_refresh(self, store, runner):
+        patches = [
+            patch.object(server, "STORE", store),
+            patch.object(server, "tracker_module", return_value=_Tracker),
+            patch.object(server, "automation", return_value=runner),
+            patch.object(server, "AUTO_NOTION", True),
+            patch.object(server, "NOTION_TOKEN", "secret"),
+            patch.object(server, "fetch_topic", return_value={}),
+            patch.object(server, "extract_weekly_update", return_value=None),
+            patch.object(server, "extract_completion",
+                         side_effect=lambda topic, base, status: {**base, "completion_date": "2026-09-20",
+                                                                  "status": status}),
+            patch.object(server.legacy, "save_cache"),
+            patch.object(server.legacy, "load_data", return_value={}),
+        ]
+        with patches[0]:
+            for item in patches[1:]:
+                item.start()
+            try:
+                return server.refresh_board("test")
+            finally:
+                for item in reversed(patches):
+                    item.stop()
+
+    def test_refresh_skips_settled_completion_and_closure_jobs(self):
+        """已有 verified/ignored 状态作业的 topic，刷新不得再为其排队同类迁移作业
+        （completion/closure 共用同一入口，按 bucket workflow 匹配）。"""
+        original_data_path = storage.DATA_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            storage.DATA_PATH = Path(tmp) / "missing.json"
+            store = Store(Path(tmp) / "test.db")
+            for topic_id, title in (("10212", "Dular"), ("10385", "CKB Builder Lab")):
+                store.upsert_project(topic_id, title, f"https://talk.nervos.org/t/x/{topic_id}",
+                                     "in_progress", 2)
+            key = store.queue_job("10212", "completion")
+            store.set_step(key, "completion", "verified", ["page"])
+            key = store.queue_job("10385", "completion")
+            store.set_job_status(key, "ignored", "用户手动忽略")
+            runner = _Automation(store)
+            try:
+                result = self._run_refresh(store, runner)
+                queued = store.query("""SELECT * FROM sync_jobs
+                                        WHERE workflow IN ('completion','closure') AND status='queued'""")
+            finally:
+                storage.DATA_PATH = original_data_path
+        self.assertEqual(runner.completed, [])
+        self.assertEqual(result["transitions"], [])
+        self.assertFalse(result["errors"])
+        # 没有新排队任何 completion/closure 作业
+        self.assertEqual(queued, [])
+
+    def test_refresh_does_not_resume_ignored_in_progress_job(self):
+        """被用户忽略的入库作业（哪怕还有失败步骤）刷新时不得恢复执行，防止重复建页。"""
+        original_data_path = storage.DATA_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            storage.DATA_PATH = Path(tmp) / "missing.json"
+            store = Store(Path(tmp) / "test.db")
+            store.upsert_project("10653", "NNCBN", "https://talk.nervos.org/t/x/10653",
+                                 "in_progress", 2)
+            key = store.queue_job("10653", "in_progress", {"topic_id": "10653", "project_name": "NNCBN"})
+            store.set_step(key, "project_list", "failed", [], "interrupted")
+            store.set_job_status(key, "ignored", "用户手动忽略")
+            runner = _Automation(store)
+            try:
+                result = self._run_refresh(store, runner)
+            finally:
+                storage.DATA_PATH = original_data_path
+        self.assertEqual(runner.resumed, [])
+        self.assertFalse(result["new_projects"])
+        self.assertFalse(result["errors"])
+
 
 if __name__ == "__main__":
     unittest.main()
