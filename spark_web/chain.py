@@ -48,12 +48,9 @@ INDEXER_PAGE_SIZE = 50  # get_transactions 单次分页条数（保守取值）
 # 「资金使用情况」内联库列名（与 workflows.FUND_DB_SCHEMA 对齐）
 FUND_DB_TITLE = "资金使用情况 / Fund Usage"
 FUND_COL_DATE = "日期 / Date"
-FUND_COL_TYPE = "类型 / Type"
 FUND_COL_AMOUNT = "金额 / Amount"
-FUND_COL_HASH = "交易哈希 / Transaction Hash"
-FUND_COL_NOTES = "备注 / Notes"
-FUND_TYPE_WITHDRAWAL = "提款 Withdrawal"
-FUND_TYPE_DEPOSIT = "存款 Deposit"
+FUND_COL_HASH = "交易哈希 / TX Hash"
+FUND_COL_PURPOSE = "用途 / Purpose"
 
 ADDRESS_RE = re.compile(r"\b(?:ckb1|ckt1)[02-9ac-hj-np-z02-9ac-hj-np-z1l]{20,}\b")
 BEIJING_TZ = dt.timezone(dt.timedelta(hours=8))
@@ -888,7 +885,7 @@ def _multisig_pages(notion: Any, config: dict) -> dict[str, dict]:
 def scan_multisig(notion: Any, config: dict, rpc: ChainRPC,
                   main_records: list[dict] | None = None) -> list[dict]:
     """对每个已知项目多签拉交易，只保留划出到非主钱包地址的提款，
-    按 tx_hash 对照各项目页「资金使用情况」内联库去重（不落库）。"""
+    按 (日期, 金额) 对照各项目页「资金使用情况」内联库去重（不落库）。"""
     if main_records is None:
         main_records = fetch_main_wallet_records(rpc)
     # 条件①：主钱包历史流出交易的对手方；条件②：Notion 项目中出现的地址
@@ -899,29 +896,30 @@ def scan_multisig(notion: Any, config: dict, rpc: ChainRPC,
     for address, info in sorted(pages.items()):
         if address not in main_counterparties:
             continue  # 两个条件缺一不可
-        existing_hashes = set()
+        existing_keys = set()
         if info["source"]:
             for row in notion.query(info["source"]):
-                tx_hash = str(_page_property(row, FUND_COL_HASH) or "").strip()
-                if tx_hash:
-                    existing_hashes.add(tx_hash)
+                key = (str(_page_property(row, FUND_COL_DATE) or "").strip(),
+                       str(_page_property(row, FUND_COL_AMOUNT) or "").strip())
+                if any(key):
+                    existing_keys.add(key)
         records = fetch_multisig_records(rpc, address)
         rows = []
         for record in records:
             if record.get("to_main"):
                 continue  # 退回主钱包的钱由主钱包侧记录，不进项目页提款
-            if record["tx_hash"] in existing_hashes:
+            key = (beijing_date(record.get("date")), format_ckb(record.get("amount_ckb")))
+            if key in existing_keys:
                 continue
             rows.append({
                 "tx_hash": record["tx_hash"],
-                "date": beijing_date(record.get("date")),
-                "amount": format_ckb(record.get("amount_ckb")),
-                "type": FUND_TYPE_WITHDRAWAL,
+                "date": key[0],
+                "amount": key[1],
                 "counterparty_address": record.get("counterparty_address") or "",
             })
         results.append({"multisig": address, "project": info["project"],
                         "page_id": info["page_id"], "source": info["source"],
-                        "rows": rows, "existing": len(existing_hashes)})
+                        "rows": rows, "existing": len(existing_keys)})
     return results
 
 
@@ -930,7 +928,7 @@ def apply_multisig(notion: Any, config: dict, rpc: ChainRPC,
     """把项目页「资金使用情况」内联库缺失的行写入（列名按 FUND_DB_SCHEMA）。"""
     if results is None:
         results = scan_multisig(notion, config, rpc)
-    from .notion import prop_date, prop_select, prop_text, prop_url
+    from .notion import prop_date, prop_text, prop_title
     written, errors = [], []
     for item in results or []:
         source = item.get("source")
@@ -938,23 +936,24 @@ def apply_multisig(notion: Any, config: dict, rpc: ChainRPC,
             errors.append({"multisig": item.get("multisig"),
                            "error": "项目页缺少「资金使用情况」内联库"})
             continue
-        existing_hashes = {str(_page_property(row, FUND_COL_HASH) or "").strip()
-                           for row in notion.query(source)}
+        existing_keys = {(str(_page_property(row, FUND_COL_DATE) or "").strip(),
+                          str(_page_property(row, FUND_COL_AMOUNT) or "").strip())
+                         for row in notion.query(source)}
         for row in item.get("rows") or []:
             tx_hash = row.get("tx_hash") or ""
-            if not tx_hash or tx_hash in existing_hashes:
+            key = (row.get("date") or "", row.get("amount") or "")
+            if not tx_hash or key in existing_keys:
                 continue
             properties = {
+                FUND_COL_HASH: prop_title(tx_hash),
                 FUND_COL_DATE: prop_date(row.get("date") or ""),
-                FUND_COL_TYPE: prop_select(row.get("type") or FUND_TYPE_WITHDRAWAL),
                 FUND_COL_AMOUNT: prop_text(row.get("amount") or ""),
-                FUND_COL_HASH: prop_url(tx_hash),
-                FUND_COL_NOTES: prop_text("链上检索自动登记 / Fetched from chain"),
+                FUND_COL_PURPOSE: prop_text("链上检索自动登记 / Fetched from chain"),
             }
             try:
                 page = notion.create_page(source, properties)
                 _verify_row(notion, page.get("id"), properties)
-                existing_hashes.add(tx_hash)
+                existing_keys.add(key)
                 written.append({"multisig": item.get("multisig"), "project": item.get("project"),
                                 "tx_hash": tx_hash, "id": page.get("id")})
             except Exception as exc:

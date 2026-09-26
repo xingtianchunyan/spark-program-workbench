@@ -6,7 +6,7 @@ from typing import Any
 from .notion import (
     NotionClient, NotionConflict, assert_properties, block_signatures, bullet,
     cloneable_block, divider, heading, paragraph, prop_date, prop_select, prop_text, prop_title,
-    prop_url, property_value, values_match,
+    property_value, values_match,
 )
 from .storage import Store, checksum, utcnow
 import re
@@ -343,14 +343,13 @@ class NotionAutomation:
     # 模板内联库未共享给 integration，原始列名不可读，以下为按语义拟合的近似 schema）。
     FUND_DB_TITLE = "资金使用情况 / Fund Usage"
     ADJUST_DB_TITLE = "项目调整 / Project Adjustments"
-    # 资金库统一列序：交易哈希 → 备注 → 日期 → 类型 → 金额（Name 为 Notion 自动提供的标题列）。
-    # 2026-09-26 与线上 16 个内联库实际结构对齐（原「用途 / Purpose」「交易哈希 / TX Hash」已并入/迁移）。
+    # 资金库统一列序：交易哈希（标题列）→ 日期 → 金额 → 用途。
+    # 2026-09-26 与线上 16 个内联库实际结构对齐（原「备注 / Notes」「类型 / Type」已并入/迁移）。
     FUND_DB_SCHEMA = {
-        "交易哈希 / Transaction Hash": {"url": {}},
-        "备注 / Notes": {"rich_text": {}},
+        "交易哈希 / TX Hash": {"title": {}},
         "日期 / Date": {"date": {}},
-        "类型 / Type": {"select": {"options": [{"name": "提款 Withdrawal"}, {"name": "存款 Deposit"}]}},
         "金额 / Amount": {"rich_text": {}},
+        "用途 / Purpose": {"rich_text": {}},
     }
     ADJUST_DB_SCHEMA = {
         "日期 / Date": {"date": {}},
@@ -438,21 +437,19 @@ class NotionAutomation:
         return None
 
     FUND_COL_DATE = "日期 / Date"
-    FUND_COL_TYPE = "类型 / Type"
     FUND_COL_AMOUNT = "金额 / Amount"
-    FUND_COL_HASH = "交易哈希 / Transaction Hash"
-    FUND_COL_NOTES = "备注 / Notes"
+    FUND_COL_HASH = "交易哈希 / TX Hash"
+    FUND_COL_PURPOSE = "用途 / Purpose"
+    # 退款行的用途前缀（内联库无类型列，提款/存款语义用前缀区分）
+    FUND_REFUND_PREFIX = "退款 · "
     ADJUST_COL_DATE = "日期 / Date"
     ADJUST_COL_SUMMARY = "调整内容 / Adjustment"
     ADJUST_COL_REASON = "原因 / Reason"
-    # 与 FUND_DB_SCHEMA 的 select 选项名保持一致（内联库独立于 transactions 表的 select 值）
-    FUND_TYPE_WITHDRAWAL = "提款 Withdrawal"
-    FUND_TYPE_DEPOSIT = "存款 Deposit"
 
     def _fill_fund_usage(self, page_id: str, disbursements: list[dict],
                          refunds: list[dict] | None = None) -> list[str]:
         """把委员会拨款/退款明细写入页内「资金使用情况」内联库；按 (日期, 金额) 去重。
-        金库拨出记提款，退回金库记存款。库不存在时跳过不报错。"""
+        金库拨出的用途为 note 原文，退回金库的用途加「退款 · 」前缀。库不存在时跳过不报错。"""
         entries = [("withdrawal", d) for d in disbursements or []]
         entries += [("deposit", r) for r in refunds or []]
         if not entries:
@@ -468,14 +465,15 @@ class NotionAutomation:
             amount = item.get("amount") or ""
             if not date or not amount or (date, amount) in existing:
                 continue
-            note = " ".join(x for x in (item.get("note") or "", item.get("post_url") or "") if x)
+            text = item.get("note") or ""
+            if kind == "deposit":
+                text = self.FUND_REFUND_PREFIX + text
+            note = " ".join(x for x in (text, item.get("post_url") or "") if x)
             properties = {
+                self.FUND_COL_HASH: prop_title(item.get("tx_hash") or ""),
                 self.FUND_COL_DATE: prop_date(date),
-                self.FUND_COL_TYPE: prop_select(self.FUND_TYPE_DEPOSIT if kind == "deposit"
-                                                else self.FUND_TYPE_WITHDRAWAL),
                 self.FUND_COL_AMOUNT: prop_text(amount),
-                self.FUND_COL_HASH: prop_url(item.get("tx_hash") or None),
-                self.FUND_COL_NOTES: prop_text(note),
+                self.FUND_COL_PURPOSE: prop_text(note),
             }
             row = self.notion.create_page(source, properties)
             existing.add((date, amount))

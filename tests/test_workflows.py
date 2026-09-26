@@ -230,12 +230,15 @@ class WorkflowTests(unittest.TestCase):
         rows = self._inline_rows(page_id, self.auto.FUND_DB_TITLE)
         self.assertEqual(len(rows), 2)
         by_amount = {property_value(r, "金额 / Amount"): r for r in rows}
-        self.assertEqual(property_value(by_amount["140 CKB"], "类型 / Type"), "提款 Withdrawal")
-        self.assertEqual(property_value(by_amount["70 CKB"], "类型 / Type"), "存款 Deposit")
+        purpose_out = property_value(by_amount["140 CKB"], "用途 / Purpose")
+        purpose_in = property_value(by_amount["70 CKB"], "用途 / Purpose")
+        self.assertFalse(purpose_out.startswith("退款 · "))
+        self.assertTrue(purpose_in.startswith("退款 · "))
+        self.assertIn("退回金库", purpose_in)
         self.assertEqual(property_value(by_amount["140 CKB"], "日期 / Date"), "2026-01-02")
-        self.assertEqual(property_value(by_amount["140 CKB"], "交易哈希 / Transaction Hash"), "0xabc")
-        self.assertIn("首期拨款", property_value(by_amount["140 CKB"], "备注 / Notes"))
-        self.assertIn("?u=alice#2", property_value(by_amount["140 CKB"], "备注 / Notes"))
+        self.assertEqual(property_value(by_amount["140 CKB"], "交易哈希 / TX Hash"), "0xabc")
+        self.assertIn("首期拨款", purpose_out)
+        self.assertIn("?u=alice#2", purpose_out)
         # 再插一遍：按 (日期, 金额) 去重，不新增行
         again = self.auto._fill_fund_usage(page_id, disbursements, refunds=refunds)
         self.assertEqual(again, [])
@@ -270,7 +273,11 @@ class WorkflowTests(unittest.TestCase):
             "SELECT notion_page_id FROM projects WHERE topic_id='90001'")[0]["notion_page_id"]
         fund_rows = self._inline_rows(page_id, self.auto.FUND_DB_TITLE)
         self.assertEqual(len(fund_rows), 1)
-        self.assertEqual(property_value(fund_rows[0], "类型 / Type"), "提款 Withdrawal")
+        # 拨款行用途为 note 原文（不带退款前缀）
+        purpose = property_value(fund_rows[0], "用途 / Purpose")
+        self.assertIn("首期拨款", purpose)
+        self.assertFalse(purpose.startswith("退款 · "))
+        self.assertEqual(property_value(fund_rows[0], "交易哈希 / TX Hash"), "0xabc")
         adjust_rows = self._inline_rows(page_id, self.auto.ADJUST_DB_TITLE)
         self.assertEqual(len(adjust_rows), 1)
         # 创建的内联库必须带 is_inline=True
