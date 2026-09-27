@@ -15,3 +15,7 @@ node_modules/
 launch-web.runtime
 spark_project_cache.json
 chain_scan_cache.json
+spark_task_data.json
+tranfr_replies.txt
+tranfr_post_10644.json
+tranfr_onboarding_data.md
