@@ -46,9 +46,13 @@
 .preview-open-link{font-size:12px;color:var(--muted);text-decoration:none;padding:0 4px;border-radius:6px}
 .preview-open-link:hover{color:var(--blue)}
 .preview-pane{margin-top:8px}
-.split-row{display:flex;gap:12px;align-items:flex-start}
+.split-row{display:flex;gap:12px;align-items:stretch}
 .split-row>.split-main{flex:3 1 0;min-width:0}
-.split-row>.split-side{flex:2 1 0;min-width:280px}
+.split-row>.split-side{flex:2 1 0;min-width:280px;display:flex;flex-direction:column;overflow:hidden}
+.split-row>.split-side #notionSources{overflow-y:auto;flex:1;min-height:0;margin-top:8px}
+.compact-row[data-pid]{cursor:default}
+.compact-row[data-pid]:hover{background:#242934}
+.preview-table tr.row-highlight td{background:#fff1a8!important}
 @media(max-width:1100px){.split-row{flex-direction:column}.split-row>.split-main,.split-row>.split-side{flex:none;width:100%}}
 .preview-table td.cell-edit{cursor:text}
 .cell-editor{width:100%;min-width:120px;padding:2px 4px;border:1px solid var(--blue);border-radius:6px;font:inherit;background:#fff;color:#1f2328}
