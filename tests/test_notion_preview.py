@@ -208,5 +208,43 @@ class PreviewTableEndpointTests(unittest.TestCase):
         self.assertEqual(len(body["rows"]), 1)
 
 
+class BuildPropertyPayloadTests(unittest.TestCase):
+    def test_text_like_types(self):
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "title"}, "a<b"),
+                         {"N": {"title": [{"text": {"content": "a<b"}}]}})
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "rich_text"}, "x"),
+                         {"N": {"rich_text": [{"text": {"content": "x"}}]}})
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "text"}, ""),
+                         {"N": {"rich_text": [{"text": {"content": ""}}]}})
+
+    def test_number_parsing_and_clear(self):
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "number"}, "1,204,820"),
+                         {"N": {"number": 1204820.0}})
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "number"}, ""),
+                         {"N": {"number": None}})
+        with self.assertRaises(np.PreviewError):
+            np.build_property_payload({"name": "N", "type": "number"}, "abc")
+
+    def test_date_select_and_multi(self):
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "date"}, "2026-05-21"),
+                         {"N": {"date": {"start": "2026-05-21"}}})
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "date"}, ""),
+                         {"N": {"date": None}})
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "select"}, "已完成"),
+                         {"N": {"select": {"name": "已完成"}}})
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "multi_select"}, "a，b、c"),
+                         {"N": {"multi_select": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}})
+
+    def test_checkbox_url_and_uneditable(self):
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "checkbox"}, "是"),
+                         {"N": {"checkbox": True}})
+        self.assertEqual(np.build_property_payload({"name": "N", "type": "url"}, ""),
+                         {"N": {"url": None}})
+        with self.assertRaises(np.PreviewError):
+            np.build_property_payload({"name": "N", "type": "formula"}, "x")
+        with self.assertRaises(np.PreviewError):
+            np.build_property_payload({"name": "N", "type": "relation"}, "x")
+
+
 if __name__ == "__main__":
     unittest.main()

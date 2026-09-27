@@ -24,7 +24,7 @@ from . import chain
 from .forum import (ai_json, extract_completion, extract_new_project, extract_weekly_update,
                     fetch_topic, normalized_posts, post_as_user)
 from . import legacy
-from .notion import NotionClient, NotionConflict
+from .notion import NotionClient, NotionConflict, NotionError
 from . import notion_preview
 from .storage import Store, utcnow
 from .workflows import NotionAutomation, WorkflowInputError, payload_from_json, REQUIRED_NEW_PROJECT
@@ -1216,6 +1216,57 @@ class Handler(BaseHTTPRequestHandler):
                     raise PermissionError("只读用户不能执行 Notion 写入")
                 payload = enrich_notion_payload("completion", self.body_json())
                 self.json(200, automation().execute_completion(payload, session["username"]))
+                return
+            if path == "/api/notion/preview-edit":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能执行 Notion 写入")
+                if not NOTION_TOKEN:
+                    self.json(400, {"error": "未配置 NOTION_TOKEN，无法写回 Notion"})
+                    return
+                data = self.body_json()
+                key = str(data.get("key") or "")
+                row_id = str(data.get("row_id") or "")
+                column_name = str(data.get("column") or "")
+                value = data.get("value")
+                if not key or not row_id or not column_name or not isinstance(value, str):
+                    self.json(400, {"error": "缺少必填字段: key, row_id, column, value"})
+                    return
+                preview_cfg = ROOT / "notion_preview.json"
+                if not preview_cfg.exists():
+                    self.json(404, {"error": "未配置预览页面"})
+                    return
+                try:
+                    config = json.loads(preview_cfg.read_text(encoding="utf-8"))
+                    # 列定义以 Notion 实际 schema 为准（防止前端篡改类型）
+                    parents = []
+                    for parent in config.get("parents") or []:
+                        wanted = [{"key": t["key"], "hint": t.get("hint") or ""}
+                                  for t in (config.get("tabs") or [])
+                                  if t.get("key") in (parent.get("tables") or [])]
+                        parents.append({"page_id": parent.get("page_id"), "tables": wanted})
+                    tables = notion_preview.discover_tables(parents)
+                    info = tables.get(key)
+                    if not info:
+                        self.json(404, {"error": f"未配置的表 key：{key}"})
+                        return
+                    schema = notion_preview._sync_schema(info["space_id"], info["collection_id"])
+                    column = next(({"name": (v.get("name") or k), "type": v.get("type") or ""}
+                                   for k, v in schema.items()
+                                   if (v.get("name") or k) == column_name), None)
+                    if not column:
+                        self.json(404, {"error": f"列不存在：{column_name}"})
+                        return
+                    notion_preview.edit_cell(automation().notion, row_id, column, value)
+                    notion_preview._table_cache.pop(key, None)  # 仅作废该表缓存
+                except notion_preview.PreviewError as exc:
+                    self.json(400, {"error": str(exc)})
+                    return
+                except NotionError as exc:
+                    self.json(502, {"error": f"Notion 写入失败: {exc}"})
+                    return
+                STORE.audit(session["username"], "notion_preview_edit", row_id,
+                            {"table": key, "column": column_name, "value": value[:200]})
+                self.json(200, {"ok": True})
                 return
             if path == "/api/chain/apply-main":
                 if session["role"] == "viewer":

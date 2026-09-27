@@ -361,7 +361,7 @@ def table_json(key: str, config: dict, refresh: bool = False) -> dict:
                         "width": _clamp_width(view_col.get("width"))})
     rows = []
     for row in data["rows"]:
-        cells = {}
+        cells = {"_row_id": row["id"]}
         for k in ordered_keys:
             cells[k] = format_cell(row["props"].get(k), (schema.get(k) or {}).get("type") or "")
         rows.append(cells)
@@ -381,3 +381,55 @@ def table_json(key: str, config: dict, refresh: bool = False) -> dict:
 def invalidate_cache() -> None:
     _table_cache.clear()
     _discover_cache.update(at=0.0, tables={})
+
+
+# ===== 预览单元格写回 =====
+# 通过官方 API（集成 Token）按属性名更新行页面；不可写类型在此拒绝并给出中文说明。
+_UNEDITABLE = {"formula": "公式属性由 Notion 自动计算", "rollup": "汇总属性由 Notion 自动计算",
+               "created_time": "创建时间由 Notion 自动记录", "created_by": "创建者由 Notion 自动记录",
+               "last_edited_time": "编辑时间由 Notion 自动记录", "last_edited_by": "编辑者由 Notion 自动记录",
+               "people": "人员属性请直接在 Notion 中修改", "relation": "关联属性请直接在 Notion 中修改",
+               "files": "附件属性请直接在 Notion 中修改"}
+
+
+def build_property_payload(column: dict, raw: str) -> dict:
+    """按列类型把用户输入转成官方 API 的属性值；空输入表示清空（按类型语义）。"""
+    name = column.get("name") or ""
+    ptype = column.get("type") or "text"
+    value = (raw or "").strip()
+    if ptype in _UNEDITABLE:
+        raise PreviewError(f"该列不支持在工作台编辑：{_UNEDITABLE[ptype]}")
+    if ptype == "title":
+        return {name: {"title": [{"text": {"content": value}}]}}
+    if ptype in {"text", "rich_text"}:
+        return {name: {"rich_text": [{"text": {"content": value}}]}}
+    if ptype == "number":
+        if not value:
+            return {name: {"number": None}}
+        try:
+            return {name: {"number": float(value.replace(",", "").replace(" ", ""))}}
+        except ValueError:
+            raise PreviewError(f"「{name}」需要数字，收到：{value!r}")
+    if ptype == "date":
+        return {name: {"date": {"start": value} if value else None}}
+    if ptype == "select":
+        return {name: {"select": {"name": value} if value else None}}
+    if ptype == "multi_select":
+        names = [x.strip() for x in value.replace("，", ",").replace("、", ",").split(",") if x.strip()]
+        return {name: {"multi_select": [{"name": x} for x in names]}}
+    if ptype == "checkbox":
+        truthy = value.lower() in {"1", "true", "yes", "y", "是", "✓", "✔", "checked"}
+        return {name: {"checkbox": truthy}}
+    if ptype == "url":
+        return {name: {"url": value or None}}
+    if ptype == "email":
+        return {name: {"email": value or None}}
+    if ptype == "phone_number":
+        return {name: {"phone_number": value or None}}
+    raise PreviewError(f"暂不支持的属性类型：{ptype}（请直接在 Notion 中修改）")
+
+
+def edit_cell(client, row_id: str, column: dict, raw: str) -> None:
+    """官方 API 写回一行的一个属性；成功后作废该表缓存。"""
+    payload = build_property_payload(column, raw)
+    client.update_page(row_id, payload)
