@@ -261,6 +261,56 @@ def quick_links() -> dict[str, str]:
     return values
 
 
+# ===== Notion 本地反向代理 =====
+# evergreen-stream-df9.notion.site 对公开页面也下发 X-Frame-Options: SAMEORIGIN
+# 与受限 CSP，平台级禁止外部嵌入。本地工作台 (127.0.0.1) 与 iframe 是同级源，
+# 由本服务反向代理文档并剥除帧限制头、把相对资源引用改写成 notion.site 绝对地址，
+# 使脚本/样式直连 notion.site 加载（子资源不受 X-Frame-Options 限制）。
+NOTION_UPSTREAM_BASE = "https://evergreen-stream-df9.notion.site"
+NOTION_PROXY_TIMEOUT = 20
+NOTION_PROXY_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+_notion_urlopen = urllib.request.urlopen  # 测试可注入假上游
+
+# 代理响应必须剥除的响应头（值均为小写键）
+_PROXY_STRIP_HEADERS = {
+    "x-frame-options",                      # 否则 iframe 被浏览器拒绝
+    "content-security-policy",              # 限制 iframe 与脚本源，本地嵌入必须去
+    "content-security-policy-report-only",
+    "set-cookie",                           # 第三方 iframe 场景 cookie 会被拒，留着只报错
+    # 逐跳头 / 由本服务重建的头
+    "transfer-encoding", "connection", "keep-alive", "content-length",
+    "proxy-authenticate", "proxy-authorization", "te", "trailer", "upgrade",
+}
+# HTML 属性引用形态（不含斜杠，斜杠属于资源前缀）→ 这些前缀开头的相对路径补绝对域名
+_PROXY_ATTR_NEEDLES = ('href="', 'src="', 'action="', 'content="', 'url(', '"')
+# Notion 现行静态资源前缀：/_assets 为新版前端资源目录，/_next 为旧版，不可删
+_PROXY_ASSET_PREFIXES = ("/_assets", "/_next", "/_notion", "/images")
+
+
+def rewrite_notion_html(body: bytes) -> bytes:
+    """把 Notion HTML 中的相对资源引用改写成 notion.site 绝对地址。
+
+    只替换紧跟 /_assets、/_next、/_notion、/images 的引用，已含域名的绝对地址不受影响。
+    """
+    text = body.decode("utf-8", errors="replace")
+    for needle in _PROXY_ATTR_NEEDLES:
+        for prefix in _PROXY_ASSET_PREFIXES:
+            text = text.replace(needle + prefix, needle + NOTION_UPSTREAM_BASE + prefix)
+    return text.encode("utf-8")
+
+
+def fetch_notion(target: str):
+    """GET 上游固定地址；target 含 path 与 query string。调用方处理 HTTPError。"""
+    upstream = f"{NOTION_UPSTREAM_BASE}/{target}"
+    request = urllib.request.Request(upstream, method="GET", headers={
+        "User-Agent": NOTION_PROXY_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "identity",  # 不请求压缩，省去解压，浏览器拿到的都是明文
+    })
+    return _notion_urlopen(request, timeout=NOTION_PROXY_TIMEOUT)
+
+
 def _base_payload(topic_id: str) -> dict:
     rows = STORE.query("SELECT payload_json FROM sync_jobs WHERE topic_id=? AND workflow='in_progress' ORDER BY updated_at DESC LIMIT 1",
                        (topic_id,))
@@ -562,6 +612,82 @@ class Handler(BaseHTTPRequestHandler):
     def json(self, status: int, value: object) -> None:
         self._send(status, json.dumps(value, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
+    # ===== Notion 反向代理（见模块级说明） =====
+    def _send_proxy(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
+        """直接写响应，绕开 _send 默认附加的 X-Frame-Options/CSP（否则 iframe 被拦）。"""
+        self.send_response(status)
+        for key, value in headers:
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not getattr(self, "_head_only", False):
+            self.wfile.write(body)
+
+    def _proxy_notion(self, parsed) -> None:
+        target = parsed.path.removeprefix("/notion-view/")
+        if not target or target.startswith("/notion-view"):
+            self.json(404, {"error": "not found"})
+            return
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        try:
+            try:
+                resp = fetch_notion(target)
+            except urllib.error.HTTPError as exc:
+                resp = exc  # 4xx/5xx 原样转发状态码与正文，前端能看到错误而不是空白
+            status = int(getattr(resp, "status", None) or getattr(resp, "code", 500) or 500)
+            raw_headers = resp.headers.items() if resp.headers else []
+            out_headers: list[tuple[str, str]] = []
+            for key, value in raw_headers:
+                lower = key.lower()
+                if lower in _PROXY_STRIP_HEADERS:
+                    continue
+                if lower == "location":
+                    value = self._rewrite_location(value)
+                out_headers.append((key, value))
+            content_type = (resp.headers.get("Content-Type") or "").lower() if resp.headers else ""
+            body = resp.read() or b""
+            if "text/html" in content_type:
+                body = rewrite_notion_html(body)
+            self._send_proxy(status, out_headers, body)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            # notion.site 网络不可达等：返回带标记的 502，前端据此显示回退说明
+            message = f"无法连接 notion.site（{exc}）"
+            body = (f'<!doctype html><html><body data-spark-proxy-error="1">'
+                    f'<p style="font-family:sans-serif">{message}</p>'
+                    f'<p>请点击面板中的「↗ 在 Notion 中打开」直接查看公开页面。</p>'
+                    f'</body></html>').encode("utf-8")
+            self._send_proxy(502, [("Content-Type", "text/html; charset=utf-8"),
+                                   ("Cache-Control", "no-store")], body)
+        except Exception:
+            traceback.print_exc()
+            self.json(502, {"error": "Notion 代理加载失败"})
+
+    @staticmethod
+    def _rewrite_location(value: str) -> str:
+        """上游 3xx：同域 Location 重写回 /notion-view/ 继续代理；外域原样透传。"""
+        try:
+            parts = urllib.parse.urlsplit(value)
+        except ValueError:
+            return value
+        if parts.scheme in {"http", "https"} or parts.netloc:
+            if parts.netloc != urllib.parse.urlsplit(NOTION_UPSTREAM_BASE).netloc:
+                return value
+            rewritten = parts.path.lstrip("/")
+            if parts.query:
+                rewritten = f"{rewritten}?{parts.query}"
+            return f"/notion-view/{rewritten}"
+        if value.startswith("/") and not value.startswith("//"):
+            return f"/notion-view{value}"
+        return value
+
+    def do_HEAD(self) -> None:
+        self._head_only = True
+        try:
+            self.do_GET()
+        finally:
+            self._head_only = False
+
     def body_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length > 2_000_000:
@@ -646,6 +772,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(404, {"error": "预览配置文件无效"})
             else:
                 self.json(404, {"error": "未配置预览页面"})
+            return
+        if path == "/notion-view" or path.startswith("/notion-view/"):
+            # 本地反向代理公开 Notion 页面（GET-only、上游固定、不含业务数据），
+            # iframe 内联加载不走会话校验，剥帧限制头后可直接嵌入。
+            self._proxy_notion(parsed)
             return
         if path == "/api/chain/scan-main":
             if not self._session():
