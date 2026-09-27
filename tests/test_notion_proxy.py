@@ -55,7 +55,7 @@ _CLIENT = urllib.request.build_opener(_NoRedirect)
 
 
 class NotionProxyTests(unittest.TestCase):
-    def _request(self, path, fake_urlopen):
+    def _request(self, path, fake_urlopen, method="GET", body=None, headers=None):
         with patch.object(server, "_notion_urlopen", fake_urlopen), \
                 patch.object(server, "TEAM_MODE", False):
             httpd = ThreadingHTTPServer(("127.0.0.1", 0), _QuietHandler)
@@ -63,8 +63,9 @@ class NotionProxyTests(unittest.TestCase):
             thread.start()
             try:
                 url = f"http://127.0.0.1:{httpd.server_address[1]}{path}"
+                req = urllib.request.Request(url, method=method, data=body, headers=headers or {})
                 try:
-                    with _CLIENT.open(url, timeout=10) as response:
+                    with _CLIENT.open(req, timeout=10) as response:
                         return response.status, dict(response.headers), response.read()
                 except urllib.error.HTTPError as exc:
                     return exc.code, dict(exc.headers), exc.read()
@@ -175,6 +176,121 @@ class NotionProxyTests(unittest.TestCase):
         self.assertNotIn("x-frame-options", lowered)
         self.assertNotIn("content-security-policy", lowered)
         self.assertIn(b"data-spark-proxy-error", body)  # 前端据此显示回退说明
+
+    def test_prefix_get_passthrough_strips_headers(self):
+        """白名单前缀 GET 透传：同路径+query 直达上游，剥帧限制类头，非 HTML 不改写。"""
+        payload = b"console.log(1);href=\"/_next/x\""  # 形似引用也不许被改写
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            seen["method"] = request.get_method()
+            return _FakeResp(200, [
+                ("Content-Type", "application/javascript"),
+                ("Cache-Control", "max-age=31536000"),
+                ("X-Frame-Options", "SAMEORIGIN"),
+                ("Content-Security-Policy", "script-src 'self'"),
+                ("Content-Security-Policy-Report-Only", "script-src 'self'"),
+                ("Set-Cookie", "notion_browser_id=abc; Secure"),
+            ], payload)
+
+        status, headers, body = self._request("/_assets/ClientFramework-a1b2.js?v=1", fake_urlopen)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, payload)
+        lowered = {key.lower(): value for key, value in headers.items()}
+        self.assertEqual(lowered.get("content-type"), "application/javascript")
+        self.assertEqual(lowered.get("cache-control"), "max-age=31536000")
+        self.assertNotIn("x-frame-options", lowered)
+        self.assertNotIn("content-security-policy", lowered)
+        self.assertNotIn("content-security-policy-report-only", lowered)
+        self.assertNotIn("set-cookie", lowered)
+        self.assertEqual(seen["url"], f"{UPSTREAM}/_assets/ClientFramework-a1b2.js?v=1")
+        self.assertEqual(seen["method"], "GET")
+
+    def test_prefix_post_body_and_content_type_forwarded(self):
+        """loadCachedPageChunkV2 类 XHR：POST 请求体与 Content-Type 必须原样转发。"""
+        req_body = b'{"page":{"id":"a1b2-c3d4"},"limit":50}'
+        resp_body = b'{"recordMap":{}}'
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            seen["method"] = request.get_method()
+            seen["body"] = request.data
+            seen["content_type"] = request.get_header("Content-type")
+            return _FakeResp(200, [("Content-Type", "application/json")], resp_body)
+
+        status, headers, body = self._request(
+            "/api/v3/loadCachedPageChunkV2?src=app", fake_urlopen,
+            method="POST", body=req_body,
+            headers={"Content-Type": "application/json"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body, resp_body)
+        self.assertEqual(seen["url"], f"{UPSTREAM}/api/v3/loadCachedPageChunkV2?src=app")
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(seen["body"], req_body)
+        self.assertEqual(seen["content_type"], "application/json")
+
+    def test_statsig_and_print_prefixes_proxied(self):
+        """白名单内其余前缀（/statsig/、/print.）同样透传，query 保留。"""
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            return _FakeResp(204, [], b"")
+
+        status, _, _ = self._request("/statsig/v1/rgstr?k=abc", fake_urlopen)
+        self.assertEqual(status, 204)
+        self.assertEqual(seen["url"], f"{UPSTREAM}/statsig/v1/rgstr?k=abc")
+
+        def fake_urlopen2(request, timeout=None):
+            seen["url2"] = request.full_url
+            return _FakeResp(200, [("Content-Type", "text/css")], b"body{}")
+
+        status, _, _ = self._request("/print.a1b2.css", fake_urlopen2)
+        self.assertEqual(status, 200)
+        self.assertEqual(seen["url2"], f"{UPSTREAM}/print.a1b2.css")
+
+    def test_prefix_upstream_error_forwarded(self):
+        def fake_urlopen(request, timeout=None):
+            raise _FakeHTTPError(503, [("Content-Type", "text/html; charset=utf-8"),
+                                       ("X-Frame-Options", "SAMEORIGIN")], b"<h1>upstream down</h1>")
+
+        status, headers, body = self._request("/_next/static/chunk.js", fake_urlopen)
+        self.assertEqual(status, 503)
+        self.assertEqual(body, b"<h1>upstream down</h1>")
+        lowered = {key.lower(): value for key, value in headers.items()}
+        self.assertNotIn("x-frame-options", lowered)
+
+    def test_non_whitelist_prefix_not_proxied(self):
+        """非白名单路径（/api/v4/x、/evil）不得落入代理，走工作台原 404 逻辑。"""
+        called = []
+
+        def fake_urlopen(request, timeout=None):
+            called.append(request.full_url)
+            return _FakeResp(200, [], b"")
+
+        status, _, body = self._request("/api/v4/getAppConfig", fake_urlopen)
+        self.assertEqual(status, 404)
+        self.assertEqual(called, [])
+
+        status, _, body = self._request("/evil/_assets/x", fake_urlopen)
+        self.assertEqual(status, 404)
+        self.assertEqual(called, [])
+        self.assertIn(b"not found", body)
+
+    def test_prefix_post_non_whitelist_not_proxied(self):
+        """POST 到非白名单前缀同样不进代理（且不能绕过会话校验落到业务接口之外）。"""
+        called = []
+
+        def fake_urlopen(request, timeout=None):
+            called.append(request.full_url)
+            return _FakeResp(200, [], b"")
+
+        status, _, _ = self._request("/api/v4/loadCachedPageChunkV2", fake_urlopen,
+                                     method="POST", body=b"{}", headers={"Content-Type": "application/json"})
+        self.assertEqual(status, 404)
+        self.assertEqual(called, [])
 
     def test_rewrite_location_static(self):
         self.assertEqual(server.Handler._rewrite_location(f"{UPSTREAM}/A-B?x=1"),

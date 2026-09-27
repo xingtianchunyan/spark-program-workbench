@@ -267,7 +267,7 @@ def quick_links() -> dict[str, str]:
 # 由本服务反向代理文档并剥除帧限制头、把相对资源引用改写成 notion.site 绝对地址，
 # 使脚本/样式直连 notion.site 加载（子资源不受 X-Frame-Options 限制）。
 NOTION_UPSTREAM_BASE = "https://evergreen-stream-df9.notion.site"
-NOTION_PROXY_TIMEOUT = 20
+NOTION_PROXY_TIMEOUT = 30
 NOTION_PROXY_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 _notion_urlopen = urllib.request.urlopen  # 测试可注入假上游
@@ -286,6 +286,10 @@ _PROXY_STRIP_HEADERS = {
 _PROXY_ATTR_NEEDLES = ('href="', 'src="', 'action="', 'content="', 'url(', '"')
 # Notion 现行静态资源前缀：/_assets 为新版前端资源目录，/_next 为旧版，不可删
 _PROXY_ASSET_PREFIXES = ("/_assets", "/_next", "/_notion", "/images")
+# 前缀级反向代理白名单（写死，不开放任意路径）：SPA 壳内相对引用与同源 XHR
+# （loadCachedPageChunkV2 等 POST JSON）经本服务同路径透传到 notion.site。
+# 实测工作台自身路由（/、/static/、/api/*）均不在这些前缀下，无前缀方案无冲突。
+NOTION_PROXY_PREFIXES = ("/_assets/", "/_next/", "/images/", "/api/v3/", "/statsig/", "/print.")
 
 
 def rewrite_notion_html(body: bytes) -> bytes:
@@ -300,14 +304,21 @@ def rewrite_notion_html(body: bytes) -> bytes:
     return text.encode("utf-8")
 
 
-def fetch_notion(target: str):
-    """GET 上游固定地址；target 含 path 与 query string。调用方处理 HTTPError。"""
+def fetch_notion(target: str, method: str = "GET", body: bytes | None = None,
+                 content_type: str | None = None):
+    """请求上游固定地址；target 含 path 与 query string。调用方处理 HTTPError。
+
+    POST 时原样转发请求体（loadCachedPageChunkV2 需要）并透传 Content-Type。
+    """
     upstream = f"{NOTION_UPSTREAM_BASE}/{target}"
-    request = urllib.request.Request(upstream, method="GET", headers={
+    headers = {
         "User-Agent": NOTION_PROXY_UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "identity",  # 不请求压缩，省去解压，浏览器拿到的都是明文
-    })
+    }
+    if content_type:
+        headers["Content-Type"] = content_type
+    request = urllib.request.Request(upstream, method=method, data=body, headers=headers)
     return _notion_urlopen(request, timeout=NOTION_PROXY_TIMEOUT)
 
 
@@ -623,7 +634,8 @@ class Handler(BaseHTTPRequestHandler):
         if not getattr(self, "_head_only", False):
             self.wfile.write(body)
 
-    def _proxy_notion(self, parsed) -> None:
+    def _proxy_notion(self, parsed, method: str = "GET", body: bytes | None = None,
+                      content_type: str | None = None) -> None:
         target = parsed.path.removeprefix("/notion-view/")
         if not target or target.startswith("/notion-view"):
             self.json(404, {"error": "not found"})
@@ -632,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
             target = f"{target}?{parsed.query}"
         try:
             try:
-                resp = fetch_notion(target)
+                resp = fetch_notion(target, method=method, body=body, content_type=content_type)
             except urllib.error.HTTPError as exc:
                 resp = exc  # 4xx/5xx 原样转发状态码与正文，前端能看到错误而不是空白
             status = int(getattr(resp, "status", None) or getattr(resp, "code", 500) or 500)
@@ -659,6 +671,51 @@ class Handler(BaseHTTPRequestHandler):
                     f'</body></html>').encode("utf-8")
             self._send_proxy(502, [("Content-Type", "text/html; charset=utf-8"),
                                    ("Cache-Control", "no-store")], body)
+        except Exception:
+            traceback.print_exc()
+            self.json(502, {"error": "Notion 代理加载失败"})
+
+    def _proxy_notion_prefix(self, parsed) -> None:
+        """白名单前缀透传：SPA 壳内相对引用（对不同 UA 引号形态多变，HTML 重写兜不全）
+        与同源 XHR 打到本服务后，按同路径代理到 notion.site，GET/POST 均支持。"""
+        method = self.command if self.command in {"GET", "POST"} else "GET"
+        body = None
+        content_type = None
+        if method == "POST":
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length > 20_000_000:
+                self.json(413, {"error": "请求体过大"})
+                return
+            body = self.rfile.read(length) if length else None
+            content_type = self.headers.get("Content-Type")
+        target = parsed.path.lstrip("/")
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        try:
+            try:
+                resp = fetch_notion(target, method=method, body=body, content_type=content_type)
+            except urllib.error.HTTPError as exc:
+                resp = exc  # 4xx/5xx 原样转发状态码与正文，前端能看到错误而不是空白
+            status = int(getattr(resp, "status", None) or getattr(resp, "code", 500) or 500)
+            raw_headers = resp.headers.items() if resp.headers else []
+            out_headers: list[tuple[str, str]] = []
+            for key, value in raw_headers:
+                lower = key.lower()
+                if lower in _PROXY_STRIP_HEADERS:
+                    continue
+                out_headers.append((key, value))
+            content_type_resp = (resp.headers.get("Content-Type") or "").lower() if resp.headers else ""
+            resp_body = resp.read() or b""
+            if "text/html" in content_type_resp:
+                resp_body = rewrite_notion_html(resp_body)
+            self._send_proxy(status, out_headers, resp_body)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            message = f"无法连接 notion.site（{exc}）"
+            err_body = (f'<!doctype html><html><body data-spark-proxy-error="1">'
+                        f'<p style="font-family:sans-serif">{message}</p>'
+                        f'</body></html>').encode("utf-8")
+            self._send_proxy(502, [("Content-Type", "text/html; charset=utf-8"),
+                                   ("Cache-Control", "no-store")], err_body)
         except Exception:
             traceback.print_exc()
             self.json(502, {"error": "Notion 代理加载失败"})
@@ -778,6 +835,11 @@ class Handler(BaseHTTPRequestHandler):
             # iframe 内联加载不走会话校验，剥帧限制头后可直接嵌入。
             self._proxy_notion(parsed)
             return
+        if any(path.startswith(prefix) for prefix in NOTION_PROXY_PREFIXES):
+            # Notion SPA 壳内相对引用/同源 XHR 的前缀级透传（白名单见模块定义），
+            # 同样不走会话校验：iframe 页面是公开内容，本服务只起中继作用。
+            self._proxy_notion_prefix(parsed)
+            return
         if path == "/api/chain/scan-main":
             if not self._session():
                 self.json(401, {"error": "请先登录"})
@@ -881,7 +943,12 @@ class Handler(BaseHTTPRequestHandler):
         self.json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if any(path.startswith(prefix) for prefix in NOTION_PROXY_PREFIXES):
+            # loadCachedPageChunkV2 等 Notion 前端 XHR：请求体原样转发，不做会话校验
+            self._proxy_notion_prefix(parsed)
+            return
         try:
             if path in {"/api/client/open", "/api/client/heartbeat", "/api/client/close"}:
                 data = self.body_json()
