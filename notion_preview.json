@@ -1,0 +1,38 @@
+{
+  "tabs": [
+    {
+      "key": "fund_allocations",
+      "label": "资金分配情况表",
+      "url": "https://www.notion.so/146639bc-0d1b-83c1-8f11-81a8fa1c9261"
+    },
+    {
+      "key": "transactions",
+      "label": "重要交易记录表",
+      "url": "https://www.notion.so/146639bc-0d1b-83c1-8f11-81a8fa1c9261"
+    },
+    {
+      "key": "ongoing_projects",
+      "label": "进行中项目表",
+      "url": "https://www.notion.so/e95639bc-0d1b-83f5-952d-811d03c925b3"
+    },
+    {
+      "key": "completed_projects",
+      "label": "已完成项目表",
+      "url": "https://www.notion.so/e95639bc-0d1b-83f5-952d-811d03c925b3"
+    }
+  ],
+  "parents": [
+    {
+      "page_id": "146639bc-0d1b-83c1-8f11-81a8fa1c9261",
+      "title": "资金池状态 / Fund Pool Status",
+      "url": "https://www.notion.so/146639bc-0d1b-83c1-8f11-81a8fa1c9261",
+      "tables": ["fund_allocations", "transactions"]
+    },
+    {
+      "page_id": "e95639bc-0d1b-83f5-952d-811d03c925b3",
+      "title": "项目列表 / Project List",
+      "url": "https://www.notion.so/e95639bc-0d1b-83f5-952d-811d03c925b3",
+      "tables": ["ongoing_projects", "completed_projects"]
+    }
+  ]
+}

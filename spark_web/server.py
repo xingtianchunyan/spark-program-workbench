@@ -634,6 +634,19 @@ class Handler(BaseHTTPRequestHandler):
             cached = STORE.get_meta("notion_overview")
             self.json(200, json.loads(cached) if cached else {"updated_at": None, "sources": {}})
             return
+        if path == "/api/notion/preview":
+            if not self._session():
+                self.json(401, {"error": "请先登录"})
+                return
+            preview_path = ROOT / "notion_preview.json"
+            if preview_path.exists():
+                try:
+                    self.json(200, json.loads(preview_path.read_text(encoding="utf-8")))
+                except (ValueError, OSError):
+                    self.json(404, {"error": "预览配置文件无效"})
+            else:
+                self.json(404, {"error": "未配置预览页面"})
+            return
         if path == "/api/chain/scan-main":
             if not self._session():
                 self.json(401, {"error": "请先登录"})
