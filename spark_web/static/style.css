@@ -45,9 +45,13 @@
 .preview-tab{display:inline-flex;align-items:center;gap:2px}
 .preview-open-link{font-size:12px;color:var(--muted);text-decoration:none;padding:0 4px;border-radius:6px}
 .preview-open-link:hover{color:var(--blue)}
-.preview-pane{margin-top:8px}
+.preview-pane{margin-top:8px;flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+#previewTabs{flex:none}
+#previewFrames{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.preview-pane>.preview-meta{flex:none}
+.preview-pane>.preview-scroll{flex:1;min-height:0}
 .split-row{display:flex;gap:12px;align-items:stretch;height:calc(70vh + 104px)}
-.split-row>.split-main{flex:3 1 0;min-width:0;display:flex;flex-direction:column}
+.split-row>.split-main{flex:3 1 0;min-width:0;display:flex;flex-direction:column;overflow:hidden}
 .split-row>.split-side{flex:2 1 0;min-width:280px;display:flex;flex-direction:column;overflow:hidden}
 .split-row>.split-side #notionSources{overflow-y:auto;flex:1;min-height:0;margin-top:8px}
 .compact-row[data-pid]{cursor:default}
@@ -60,7 +64,7 @@
 .preview-error{margin-top:10px;padding:10px 12px;border:1px solid #6b5b34;background:#2a2416;color:var(--amber);border-radius:10px;font-size:12px}
 .preview-meta{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:12px}
 .preview-incomplete{color:var(--amber)}
-.preview-scroll{max-height:70vh;overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff}
+.preview-scroll{overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff}
 .preview-table{border-collapse:collapse;width:100%;font-size:13px;color:#1f2328}
 .preview-table th,.preview-table td{border:1px solid #e3e2e0;padding:6px 8px;text-align:left;vertical-align:top;min-width:96px}
 .preview-table thead th{position:sticky;top:0;background:#f7f6f3;color:#5a5854;font-weight:600;z-index:1;white-space:nowrap}
