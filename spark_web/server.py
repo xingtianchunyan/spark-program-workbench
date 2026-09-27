@@ -25,6 +25,7 @@ from .forum import (ai_json, extract_completion, extract_new_project, extract_we
                     fetch_topic, normalized_posts, post_as_user)
 from . import legacy
 from .notion import NotionClient, NotionConflict
+from . import notion_preview
 from .storage import Store, utcnow
 from .workflows import NotionAutomation, WorkflowInputError, payload_from_json, REQUIRED_NEW_PROJECT
 
@@ -289,7 +290,20 @@ _PROXY_ASSET_PREFIXES = ("/_assets", "/_next", "/_notion", "/images")
 # 前缀级反向代理白名单（写死，不开放任意路径）：SPA 壳内相对引用与同源 XHR
 # （loadCachedPageChunkV2 等 POST JSON）经本服务同路径透传到 notion.site。
 # 实测工作台自身路由（/、/static/、/api/*）均不在这些前缀下，无前缀方案无冲突。
-NOTION_PROXY_PREFIXES = ("/_assets/", "/_next/", "/images/", "/api/v3/", "/statsig/", "/print.")
+NOTION_PROXY_PREFIXES = ("/_assets/", "/_next/", "/_notion/", "/images/", "/api/v3/",
+                         "/statsig/", "/print.", "/f/", "/katex/")
+# Notion 前端会把地址栏规范化为 /<标题>-<32位十六进制页面ID> 并整页跳转（实测行为），
+# 因此页面路径必须在根路径下提供代理，否则规范化请求落到工作台 404 直接整页死亡。
+# 匹配规则：单段或多段路径，最后一段以 32 位小写十六进制 ID 结尾（标题部分可含字母数字、
+# 连字符、下划线、括号、波浪号），且不含点号（排除 /static/ 下的文件）。
+_NOTION_PAGE_PATH = re.compile(r"^/[A-Za-z0-9_\-~%/]*[A-Za-z0-9_\-]*-?[0-9a-f]{32}$")
+
+
+def is_notion_page_path(path: str) -> bool:
+    """是否为 Notion 公开页路径（末段以 32 位十六进制页面 ID 结尾、无文件扩展名）。"""
+    if "." in path.rsplit("/", 1)[-1]:
+        return False
+    return bool(_NOTION_PAGE_PATH.match(path))
 
 
 def rewrite_notion_html(body: bytes) -> bytes:
@@ -635,8 +649,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _proxy_notion(self, parsed, method: str = "GET", body: bytes | None = None,
-                      content_type: str | None = None) -> None:
-        target = parsed.path.removeprefix("/notion-view/")
+                      content_type: str | None = None, target: str | None = None) -> None:
+        if target is None:
+            target = parsed.path.removeprefix("/notion-view/")
         if not target or target.startswith("/notion-view"):
             self.json(404, {"error": "not found"})
             return
@@ -830,6 +845,28 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.json(404, {"error": "未配置预览页面"})
             return
+        if path == "/api/notion/preview-table":
+            if not self._session():
+                self.json(401, {"error": "请先登录"})
+                return
+            query = urllib.parse.parse_qs(parsed.query)
+            key = (query.get("key") or [""])[0]
+            refresh = (query.get("refresh") or [""])[0].lower() in {"1", "true", "yes"}
+            preview_cfg = ROOT / "notion_preview.json"
+            if not preview_cfg.exists():
+                self.json(404, {"error": "未配置预览页面"})
+                return
+            try:
+                config = json.loads(preview_cfg.read_text(encoding="utf-8"))
+                result = notion_preview.table_json(key, config, refresh=refresh)
+            except notion_preview.PreviewError as exc:
+                self.json(502, {"error": str(exc)})
+                return
+            except (ValueError, OSError) as exc:
+                self.json(500, {"error": f"预览配置读取失败: {exc}"})
+                return
+            self.json(200, result)
+            return
         if path == "/notion-view" or path.startswith("/notion-view/"):
             # 本地反向代理公开 Notion 页面（GET-only、上游固定、不含业务数据），
             # iframe 内联加载不走会话校验，剥帧限制头后可直接嵌入。
@@ -839,6 +876,11 @@ class Handler(BaseHTTPRequestHandler):
             # Notion SPA 壳内相对引用/同源 XHR 的前缀级透传（白名单见模块定义），
             # 同样不走会话校验：iframe 页面是公开内容，本服务只起中继作用。
             self._proxy_notion_prefix(parsed)
+            return
+        if is_notion_page_path(path):
+            # Notion 前端地址栏规范化后的整页跳转（见 _NOTION_PAGE_PATH 说明），
+            # 按同路径代理 SPA HTML 壳，浏览器地址栏与 Notion 路由完全一致。
+            self._proxy_notion(parsed, target=path.lstrip("/"))
             return
         if path == "/api/chain/scan-main":
             if not self._session():

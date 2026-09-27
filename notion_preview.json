@@ -3,30 +3,26 @@
     {
       "key": "fund_allocations",
       "label": "资金分配情况表",
-      "url": "https://www.notion.so/146639bc-0d1b-83c1-8f11-81a8fa1c9261",
-      "proxy": "/notion-view/Fund-Pool-Status-146639bc0d1b83c18f1181a8fa1c9261",
-      "proxied": true
+      "hint": "资金分配",
+      "url": "https://www.notion.so/146639bc-0d1b-83c1-8f11-81a8fa1c9261"
     },
     {
       "key": "transactions",
       "label": "重要交易记录表",
-      "url": "https://www.notion.so/146639bc-0d1b-83c1-8f11-81a8fa1c9261",
-      "proxy": "/notion-view/Fund-Pool-Status-146639bc0d1b83c18f1181a8fa1c9261",
-      "proxied": true
+      "hint": "交易记录",
+      "url": "https://www.notion.so/146639bc-0d1b-83c1-8f11-81a8fa1c9261"
     },
     {
       "key": "ongoing_projects",
       "label": "进行中项目表",
-      "url": "https://www.notion.so/e95639bc-0d1b-83f5-952d-811d03c925b3",
-      "proxy": "/notion-view/Project-List-e95639bc0d1b83f5952d811d03c925b3",
-      "proxied": true
+      "hint": "进行中项目",
+      "url": "https://www.notion.so/e95639bc-0d1b-83f5-952d-811d03c925b3"
     },
     {
       "key": "completed_projects",
       "label": "已完成项目表",
-      "url": "https://www.notion.so/e95639bc-0d1b-83f5-952d-811d03c925b3",
-      "proxy": "/notion-view/Project-List-e95639bc0d1b83f5952d811d03c925b3",
-      "proxied": true
+      "hint": "已完成项目",
+      "url": "https://www.notion.so/e95639bc-0d1b-83f5-952d-811d03c925b3"
     }
   ],
   "parents": [

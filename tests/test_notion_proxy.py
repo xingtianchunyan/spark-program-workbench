@@ -292,6 +292,53 @@ class NotionProxyTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(called, [])
 
+    def test_root_page_path_proxies_spa_shell(self):
+        """Notion 前端地址栏规范化整页跳转到 /<标题>-<32hex>：根路径必须能代理 SPA 壳。"""
+        html = ('<!doctype html><html><head>'
+                '<script src="/_assets/app.js"></script>'
+                '</head><body>shell</body></html>').encode("utf-8")
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            return _FakeResp(200, [("Content-Type", "text/html; charset=utf-8"),
+                                   ("X-Frame-Options", "SAMEORIGIN")], html)
+
+        status, headers, body = self._request(
+            "/Project-List-e95639bc0d1b83f5952d811d03c925b3", fake_urlopen)
+        self.assertEqual(status, 200)
+        self.assertEqual(seen["url"], f"{UPSTREAM}/Project-List-e95639bc0d1b83f5952d811d03c925b3")
+        lowered = {key.lower(): value for key, value in headers.items()}
+        self.assertNotIn("x-frame-options", lowered)
+        text = body.decode("utf-8")
+        self.assertIn(f'src="{UPSTREAM}/_assets/app.js"', text)
+        self.assertIn("shell", text)
+
+    def test_root_page_path_bare_id_and_query(self):
+        """纯 ID 路径与带 query 的页面路径同样代理。"""
+        seen = {}
+
+        def fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            return _FakeResp(200, [("Content-Type", "text/html; charset=utf-8")], b"<html></html>")
+
+        status, _, _ = self._request("/e95639bc0d1b83f5952d811d03c925b3?pvs=25", fake_urlopen)
+        self.assertEqual(status, 200)
+        self.assertEqual(seen["url"], f"{UPSTREAM}/e95639bc0d1b83f5952d811d03c925b3?pvs=25")
+
+    def test_dotted_path_not_treated_as_page(self):
+        """带扩展名的路径（如 /static/ 文件）不得被页面路径规则截获。"""
+        called = []
+
+        def fake_urlopen(request, timeout=None):
+            called.append(request.full_url)
+            return _FakeResp(200, [], b"")
+
+        status, _, _ = self._request("/static-missing-e95639bc0d1b83f5952d811d03c925b3.js",
+                                     fake_urlopen)
+        self.assertEqual(status, 404)
+        self.assertEqual(called, [])
+
     def test_rewrite_location_static(self):
         self.assertEqual(server.Handler._rewrite_location(f"{UPSTREAM}/A-B?x=1"),
                          "/notion-view/A-B?x=1")
