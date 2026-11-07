@@ -5,7 +5,7 @@ from pathlib import Path
 from spark_web.config import load_workspace_config
 from spark_web.forum import _simplify_project_name
 from spark_web.notion import (NotionConflict, prop_date, prop_select, prop_text, prop_title,
-                              property_value)
+                               property_value, values_match)
 from spark_web.storage import Store
 from spark_web.workflows import NotionAutomation
 
@@ -297,7 +297,9 @@ class WorkflowTests(unittest.TestCase):
         payload["project_name"] = "Spark Program | Fiber Checkout"
         payload["team"] = "AI Team"
         result = self.auto.execute_new_project(payload)
+        again = self.auto.execute_new_project(payload)
         self.assertTrue(result["adopted_existing_page"])
+        self.assertTrue(again["adopted_existing_page"])
         self.assertEqual(result["field_mismatches"].get(op["team"]), "Manual Team")
         page = self.fake.pages[manual["id"]]
         self.assertEqual(property_value(page, op["team"]), "Manual Team")  # 已有值绝不覆盖
@@ -314,7 +316,9 @@ class WorkflowTests(unittest.TestCase):
             # completion_date / deliverables 留空 → 应被补齐
         })
         result = self.auto.execute_completion(self._completion_payload("Spark Program｜Fiber Checkout"))
+        again = self.auto.execute_completion(self._completion_payload("Spark Program｜Fiber Checkout"))
         self.assertTrue(result["adopted_existing_page"])
+        self.assertTrue(again["adopted_existing_page"])
         self.assertEqual(result["completed_page_id"], manual["id"])
         page = self.fake.pages[manual["id"]]
         self.assertEqual(property_value(page, cp["team"]), "Manual Team")  # 不覆盖
@@ -441,6 +445,110 @@ class WorkflowTests(unittest.TestCase):
             conn.execute("DELETE FROM external_records WHERE object_type='weekly_update'")
         self.auto.execute_weekly_update(update)
         self.assertEqual(len(self._inline_rows(page_id, self.auto.ADJUST_DB_TITLE)), 1)
+
+    def test_manual_fund_allocation_is_adopted_before_any_create(self):
+        fp = self.props_of("fund_allocations")
+        op = self.props_of("ongoing_projects")
+        allocation = self.fake.create_page(self.config["data_sources"]["fund_allocations"], {
+            fp["title"]: prop_title("Spark Program: Example"),
+            fp["amount"]: prop_text("900 CKB"), fp["status"]: prop_select("进行中 / Ongoing"),
+            fp["wallet"]: prop_text("ckb1manual"),
+        })
+        project = self.fake.create_page(self.config["data_sources"]["ongoing_projects"], {
+            op["title"]: prop_title("Spark Program | Example"), op["team"]: prop_text("Manual Team"),
+            op["start_date"]: prop_date("2026-01-03"),
+            op["expected_completion"]: prop_date("2026-03-01"),
+            op["total_funding"]: prop_text("900 CKB"), op["wallet"]: prop_text("ckb1manual"),
+            op["distributed"]: prop_text("10%"), op["status"]: prop_select("进行中 / Ongoing"),
+        })
+        payload = self.payload()
+        payload["transactions"] = []
+        result = self.auto.execute_new_project(payload)
+        self.assertTrue(result["adopted_existing_page"])
+        self.assertEqual(len(self.fake.query(self.config["data_sources"]["fund_allocations"])), 1)
+        self.assertEqual(len(self.fake.query(self.config["data_sources"]["ongoing_projects"])), 1)
+        self.assertEqual(property_value(allocation, fp["topic_id"]), "90001")
+        self.assertEqual(property_value(project, op["topic_id"]), "90001")
+        self.assertEqual(property_value(allocation, fp["amount"]), "900 CKB")
+
+    def test_reconcile_verifies_steps_only_after_complete_remote_readback(self):
+        fp = self.props_of("fund_allocations")
+        op = self.props_of("ongoing_projects")
+        allocation = self.fake.create_page(self.config["data_sources"]["fund_allocations"], {
+            fp["title"]: prop_title("Example"), fp["amount"]: prop_text("700 CKB"),
+            fp["status"]: prop_select("进行中 / Ongoing"), fp["wallet"]: prop_text("ckb1example"),
+        })
+        project = self.fake.create_page(self.config["data_sources"]["ongoing_projects"], {
+            op["title"]: prop_title("Spark Program: Example"), op["team"]: prop_text("alice"),
+            op["start_date"]: prop_date("2026-01-02"),
+            op["expected_completion"]: prop_date("2026-02-27"),
+            op["total_funding"]: prop_text("$700 USD"), op["wallet"]: prop_text("ckb1example"),
+            op["distributed"]: prop_text("20%"), op["status"]: prop_select("进行中 / Ongoing"),
+        })
+        key = self.store.queue_job("90001", "in_progress", {**self.payload(), "transactions": []})
+        result = self.auto.reconcile_notion("test")
+        job = self.store.query("SELECT status FROM sync_jobs WHERE idempotency_key=?", (key,))[0]
+        self.assertEqual(job["status"], "verified")
+        self.assertIn(key, result["verified_jobs"])
+        self.assertEqual(property_value(project, op["topic_id"]), "90001")
+        self.assertEqual(property_value(allocation, fp["topic_id"]), "90001")
+        done = {row["automation_step"]: row["done"] for row in
+                self.store.query("SELECT automation_step,done FROM tasks WHERE topic_id='90001'")}
+        self.assertEqual(done["project_list"], 1)
+        self.assertEqual(done["fund_pool"], 1)
+
+    def test_reconcile_title_only_row_does_not_false_verify_job(self):
+        op = self.props_of("ongoing_projects")
+        self.fake.create_page(self.config["data_sources"]["ongoing_projects"], {
+            op["title"]: prop_title("Example"),
+        })
+        key = self.store.queue_job("90001", "in_progress", {**self.payload(), "transactions": []})
+        result = self.auto.reconcile_notion("test")
+        job = self.store.query("SELECT status FROM sync_jobs WHERE idempotency_key=?", (key,))[0]
+        self.assertNotEqual(job["status"], "verified")
+        self.assertNotIn(key, result["verified_jobs"])
+
+    def test_duplicate_transaction_conflict_has_no_write_or_archive_side_effect(self):
+        tp = self.props_of("transactions")
+        source = self.config["data_sources"]["transactions"]
+        for _ in range(2):
+            self.fake.create_page(source, {tp["title"]: prop_title("0xabc")})
+        before = self.fake.counter
+        with self.assertRaises(NotionConflict):
+            self.auto.execute_new_project(self.payload())
+        self.assertEqual(self.fake.counter, before)
+        self.assertEqual(len(self.fake.query(source)), 2)
+        self.assertEqual(self.fake.query(self.config["data_sources"]["fund_allocations"]), [])
+
+    def test_amount_equivalence_requires_same_currency_and_decimal_value(self):
+        self.assertTrue(values_match("1,000 CKB", "1000 CKB"))
+        self.assertFalse(values_match("1,000 CKB", "1,000 USD"))
+        self.assertFalse(values_match("1,000 CKB", "10.00 CKB"))
+        self.assertFalse(values_match("ckb1example", "ckb1different"))
+
+    def test_identity_schema_is_created_lazily_for_existing_workspaces(self):
+        schemas = {source: {} for source in self.config["data_sources"].values()}
+        self.fake.retrieve_data_source = lambda source: {"id": source, "properties": schemas[source]}
+
+        def update(source, properties):
+            schemas[source].update(properties)
+            return {"id": source, "properties": schemas[source]}
+
+        self.fake.update_data_source = update
+        self.auto.ensure_identity_schema()
+        for key in ("fund_allocations", "ongoing_projects", "completed_projects"):
+            configured = self.props_of(key)
+            self.assertIn(configured["topic_id"], schemas[self.config["data_sources"][key]])
+        self.assertIn(self.props_of("ongoing_projects")["proposal_url"],
+                      schemas[self.config["data_sources"]["ongoing_projects"]])
+
+    def test_invalid_extracted_data_stops_before_remote_write(self):
+        payload = self.payload()
+        payload["allocated_amount"] = "700"  # no currency
+        before = self.fake.counter
+        with self.assertRaisesRegex(ValueError, "币种"):
+            self.auto.execute_new_project(payload)
+        self.assertEqual(self.fake.counter, before)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@
   "properties": {
     "fund_allocations": {
       "title": "项目名称 / Project Name",
+      "topic_id": "Nervos Talk Topic ID",
       "amount": "分配金额 / Allocated Amount",
       "status": "状态 / Status",
       "wallet": "项目多签钱包地址/Project Multisig Wallet Address"
@@ -27,6 +28,8 @@
     },
     "ongoing_projects": {
       "title": "项目名称 / Project Name",
+      "topic_id": "Nervos Talk Topic ID",
+      "proposal_url": "Nervos Talk Proposal URL",
       "team": "团队 / Team",
       "start_date": "开始日期 / Start Date",
       "expected_completion": "预计完成日期 / Est. Completion",
@@ -37,6 +40,8 @@
     },
     "completed_projects": {
       "title": "项目名称 / Project Name",
+      "topic_id": "Nervos Talk Topic ID",
+      "proposal_url": "Nervos Talk Proposal URL",
       "team": "团队 / Team",
       "start_date": "开始日期 / Start Date",
       "completion_date": "完成日期 / Completion Date",

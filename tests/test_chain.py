@@ -228,17 +228,23 @@ class ApplyMainTests(unittest.TestCase):
         self.assertEqual(sorted(again["skipped"]), ["0xaaa", "0xbbb"])
         self.assertEqual(len(self.tx_rows()), 2)
 
-    def test_apply_main_updates_mismatched_row(self):
+    def test_apply_main_preserves_mismatched_manual_row(self):
         chain.apply_main(self.fake, self.config, self.records())
         tp = self.config["properties"]["transactions"]
-        # 人工把金额改坏 → apply 应按链上数据修正回来
+        # 已有行可能是 USDI 等历史资产的手工账，自动同步不得覆盖金额或用途。
         row = self.tx_rows()["0xaaa"]
-        self.fake.update_page(row["id"], {tp["amount"]: prop_text("1 CKB")})
+        self.fake.update_page(row["id"], {
+            tp["amount"]: prop_text("1,000 USDI"),
+            tp["purpose"]: prop_text("Historical USDI grant"),
+        })
         result = chain.apply_main(self.fake, self.config, self.records())
         self.assertEqual(result["created"], [])
-        self.assertEqual(result["updated"], ["0xaaa"])
+        self.assertEqual(result["updated"], [])
+        self.assertEqual(result["preserved"], [{"tx_hash": "0xaaa", "fields": ["amount"]}])
         self.assertEqual(property_value(self.tx_rows()["0xaaa"], tp["amount"]),
-                         "1,234,567 CKB")
+                         "1,000 USDI")
+        self.assertEqual(property_value(self.tx_rows()["0xaaa"], tp["purpose"]),
+                         "Historical USDI grant")
 
     def test_scan_main_buckets_missing_mismatched_extra(self):
         chain.apply_main(self.fake, self.config, self.records())
@@ -334,14 +340,14 @@ class ScanCacheTests(unittest.TestCase):
         self.assertEqual(len(again["missing"]), 3)
         self.assertEqual(again["cursor"]["last_tx_hash"], "0xB")
 
-    def test_scan_main_resume_false_ignores_cache(self):
+    def test_scan_main_full_rescan_preserves_cached_history(self):
         rpc1 = self._main_rpc(["0xA"])
         chain.scan_main(self.fake, self.config, rpc1, cache_path=self.cache_path)
         rpc2 = self._main_rpc(["0xD"])
         second = chain.scan_main(self.fake, self.config, rpc2, resume=False,
                                  cache_path=self.cache_path)
-        self.assertEqual(second["scanned"], 1)
-        self.assertEqual([r["tx_hash"] for r in second["missing"]], ["0xD"])
+        self.assertEqual(second["scanned"], 2)
+        self.assertEqual([r["tx_hash"] for r in second["missing"]], ["0xD", "0xA"])
 
     def _multisig_rpc(self, hashes):
         grouped = [{"tx_hash": h, "cells": [["input", 0]]} for h in hashes]

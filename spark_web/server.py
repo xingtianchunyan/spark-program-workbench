@@ -23,7 +23,7 @@ from .config import AUTO_NOTION, BUILD_VERSION, HOST, NOTION_TOKEN, PORT, ROOT, 
 from . import chain
 from .forum import (ai_json, extract_completion, extract_new_project, extract_weekly_update,
                     fetch_topic, normalized_posts, post_as_user)
-from . import legacy
+from . import legacy, project_tracking
 from .notion import NotionClient, NotionConflict, NotionError
 from . import notion_preview
 from .storage import Store, utcnow
@@ -443,10 +443,16 @@ def refresh_board(actor: str = "local-admin") -> dict:
         LAST_REFRESH_AT = time.monotonic()
         seeded = STORE.get_meta("board_seeded_v1")
         states = {"in_progress": "in_progress", "completion": "completion", "closure": "closure"}
+        whitelist = board.get("board_whitelist") or {}
+        def proposal_post(post: dict) -> bool:
+            return not project_tracking._related_whitelist_status(
+                post, str(whitelist.get(str(post.get("id"))) or ""))
         if not seeded:
             preexisting = {row["topic_id"] for row in STORE.query("SELECT topic_id FROM projects")}
             for bucket, lifecycle in states.items():
                 for post in classified.get(bucket, []):
+                    if not proposal_post(post):
+                        continue
                     topic_id = str(post["id"])
                     if topic_id not in preexisting:
                         STORE.upsert_project(topic_id, post.get("title", ""), post.get("url", ""),
@@ -455,7 +461,26 @@ def refresh_board(actor: str = "local-admin") -> dict:
             STORE.audit(actor, "board_seeded", "nervos_talk", {"projects": len(STORE.query('SELECT * FROM projects'))})
             result["seeded"] = True
 
-        in_progress_posts = {str(p["id"]): p for p in classified.get("in_progress", [])}
+        # Rebuild local↔Notion identity before any automatic write.  This makes
+        # fresh installs and restored databases adopt complete manual records
+        # instead of creating title-based duplicates.
+        if NOTION_TOKEN:
+            try:
+                runner = automation()
+                if hasattr(runner, "reconcile_notion"):
+                    overview = runner.reconcile_notion(actor)
+                    result["notion_reconciled"] = {
+                        "matched": len(overview.get("matched_projects") or []),
+                        "verified": len(overview.get("verified_jobs") or []),
+                        "conflicts": overview.get("conflicts") or [],
+                    }
+            except Exception as exc:
+                result["errors"].append(f"Notion 对账失败，已停止本轮自动写入: {exc}")
+                STORE.audit(actor, "notion_reconcile_failed", "", {"error": str(exc)})
+                # A failed identity preflight makes all following creates unsafe.
+                return {**result, "status": "partial"}
+
+        in_progress_posts = {str(p["id"]): p for p in classified.get("in_progress", []) if proposal_post(p)}
         for topic_id, post in in_progress_posts.items():
             existing = STORE.query("SELECT * FROM projects WHERE topic_id=?", (topic_id,))
             is_new = STORE.upsert_project(topic_id, post.get("title", ""), post.get("url", ""),
@@ -525,6 +550,8 @@ def refresh_board(actor: str = "local-admin") -> dict:
         for bucket in ("completion", "closure"):
             target_status = WORKSPACE["select_values"]["completed" if bucket == "completion" else "shutdown"]
             for post in classified.get(bucket, []):
+                if not proposal_post(post):
+                    continue
                 topic_id = str(post["id"])
                 title = post.get("title", "")
                 # 结项公告/报告/公示类帖子不是项目主帖，不建结项页
@@ -760,11 +787,17 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             self._head_only = False
 
-    def body_json(self) -> dict:
+    def body_json(self, max_bytes: int = 2_000_000) -> dict:
         length = int(self.headers.get("Content-Length", "0") or 0)
-        if length > 2_000_000:
+        if length > max_bytes:
             raise ValueError("请求体过大")
         return payload_from_json(self.rfile.read(length) if length else b"{}")
+
+    def body_bytes(self, max_bytes: int) -> bytes:
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length <= 0 or length > max_bytes:
+            raise ValueError("ZIP 文件为空或请求体过大")
+        return self.rfile.read(length)
 
     def require_auth(self) -> dict:
         session = self._session()
@@ -819,6 +852,7 @@ class Handler(BaseHTTPRequestHandler):
             value = legacy.public_state(quick_links())
             value.update(enrich_jobs_state(STORE.list_state()))
             value["timeline"] = legacy.timeline(value.get("board") or {})
+            value["project_tracking"] = project_tracking.load()
             value["session"] = {"username": session["username"], "role": session["role"],
                                 "csrf_token": session["csrf_token"]}
             value["config"] = {"version": BUILD_VERSION, "team_mode": TEAM_MODE, "notion_configured": bool(NOTION_TOKEN),
@@ -1022,6 +1056,18 @@ class Handler(BaseHTTPRequestHandler):
                     raise PermissionError("只读用户不能触发同步")
                 self.json(200, refresh_board(session["username"]))
                 return
+            if path == "/api/timeline/refresh":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能刷新帖子缓存")
+                board = tracker_module().fetch_nervos_talk_projects()
+                board = legacy.apply_whitelist(board, legacy.load_data().get("board_whitelist", {}))
+                legacy.save_cache(board)
+                timeline = legacy.timeline(board)
+                STORE.audit(session["username"], "timeline_refreshed", "nervos_talk",
+                            {"posts": len(timeline), "errors": len(board.get("errors") or [])})
+                self.json(200, {"board": board, "timeline": timeline,
+                                "errors": board.get("errors") or []})
+                return
             if path == "/api/tasks":
                 if session["role"] == "viewer":
                     raise PermissionError("只读用户不能添加任务")
@@ -1042,6 +1088,89 @@ class Handler(BaseHTTPRequestHandler):
                     raise PermissionError("只读用户不能修改工作台数据")
                 data = self.body_json()
                 self.json(200, legacy.replace_section(str(data.get("section") or ""), data.get("value")))
+                return
+            if path == "/api/templates/save":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能编辑模板")
+                data = self.body_json()
+                result = legacy.save_template(str(data.get("name") or ""), str(data.get("original") or ""),
+                                              str(data.get("desc") or ""), str(data.get("template") or ""))
+                STORE.audit(session["username"], "template_saved", result["name"],
+                            {"original": str(data.get("original") or "")})
+                self.json(200, result)
+                return
+            if path == "/api/project-tracking/refresh":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能重建项目跟踪数据")
+                data = self.body_json()
+                value = project_tracking.refresh_from_forum(
+                    legacy.load_cache() or {}, scope=str(data.get("scope") or "active"))
+                STORE.audit(session["username"], "project_tracking_refreshed", "",
+                            {"projects": len(value.get("projects") or []),
+                             "errors": len(value.get("refresh_errors") or [])})
+                self.json(200, value)
+                return
+            if path == "/api/project-tracking/refresh-one":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能更新项目跟踪缓存")
+                topic_id = str(self.body_json().get("topic_id") or "")
+                if not topic_id.isdigit():
+                    raise ValueError("Topic ID 必须是数字")
+                value = project_tracking.refresh_from_forum(
+                    legacy.load_cache() or {}, topic_ids={topic_id})
+                STORE.audit(session["username"], "project_tracking_topic_refreshed", topic_id,
+                            {"errors": len(value.get("refresh_errors") or [])})
+                self.json(200, value)
+                return
+            if path == "/api/project-tracking/sync-funding":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能更新本地项目跟踪缓存")
+                if not NOTION_TOKEN:
+                    raise ValueError("未配置 NOTION_TOKEN，无法读取资金表")
+                value = project_tracking.sync_funding(NotionClient(NOTION_TOKEN, WORKSPACE["api_version"]),
+                                                      WORKSPACE, legacy.load_cache() or {})
+                STORE.audit(session["username"], "project_tracking_funding_read", "notion",
+                            {"updated": value.get("funding_updated", 0), "errors": len(value.get("funding_errors") or [])})
+                self.json(200, value)
+                return
+            if path == "/api/project-tracking/update-weekday":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能编辑约定更新星期")
+                data = self.body_json()
+                value = project_tracking.set_update_weekday(
+                    str(data.get("topic_id") or ""), int(data.get("index", -1)), str(data.get("weekday") or ""))
+                STORE.audit(session["username"], "project_tracking_weekday_updated", str(data.get("topic_id") or ""),
+                            {"index": data.get("index"), "weekday": data.get("weekday")})
+                self.json(200, value)
+                return
+            if path == "/api/project-tracking/import-notion":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能导入旧表")
+                value = project_tracking.import_notion_once(automation().notion, legacy.load_cache() or {})
+                STORE.audit(session["username"], "project_tracking_imported", "notion",
+                            {"imported": value.get("imported", 0),
+                             "errors": value.get("import_errors") or []})
+                self.json(200, value)
+                return
+            if path == "/api/project-tracking/import-text":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能导入旧表")
+                value = project_tracking.import_text(str(self.body_json().get("text") or ""),
+                                                     legacy.load_cache() or {})
+                STORE.audit(session["username"], "project_tracking_imported", "text",
+                            {"imported": value.get("imported", 0)})
+                self.json(200, value)
+                return
+            if path == "/api/project-tracking/import-zip":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能导入旧表")
+                value = project_tracking.import_notion_zip(
+                    self.body_bytes(max_bytes=50_000_000),
+                    legacy.load_cache() or {})
+                STORE.audit(session["username"], "project_tracking_imported", "zip",
+                            {"imported": value.get("imported", 0),
+                             "csv_scanned": value.get("csv_scanned", 0)})
+                self.json(200, value)
                 return
             if path == "/api/tone":
                 if session["role"] == "viewer":
@@ -1273,11 +1402,12 @@ class Handler(BaseHTTPRequestHandler):
                     raise PermissionError("只读用户不能执行 Notion 写入")
                 data = self.body_json()
                 only = data.get("only")
-                records = chain.fetch_main_wallet_records(chain_rpc())
+                records = chain.main_records_for_apply(chain_rpc())
                 result = chain.apply_main(automation().notion, WORKSPACE, records,
                                           only=[str(x) for x in only] if only else None)
                 STORE.audit(session["username"], "chain_apply_main", "",
                             {"created": result["created"], "updated": result["updated"],
+                             "preserved": result["preserved"],
                              "errors": result["errors"]})
                 self.json(200, result)
                 return

@@ -794,12 +794,11 @@ def scan_main(notion: Any, config: dict, rpc: ChainRPC | None = None,
         prev_records = entry.get("records") or []
         stop = {r.get("tx_hash") for r in prev_records if r.get("tx_hash")} if resume else None
         fresh = fetch_main_wallet_records(rpc, limit=limit, stop_hashes=stop)
-        if resume:
-            # 合并：新交易在前（indexer 倒序，新的更旧之前的都是增量），缓存去重殿后
-            fresh_hashes = {r.get("tx_hash") for r in fresh}
-            records = fresh + [r for r in prev_records if r.get("tx_hash") not in fresh_hashes]
-        else:
-            records = fresh  # 全量重扫：丢弃缓存，重新建立游标
+        # 扫描缓存是历史账本而不是可丢弃的临时结果。即使执行全量重扫，也保留
+        # 当前索引器已经不再返回的旧交易（例如已下线的历史稳定币记录）。同一
+        # tx_hash 以本次链上结果为准，缓存只补齐本次不可见的历史记录。
+        fresh_hashes = {r.get("tx_hash") for r in fresh}
+        records = fresh + [r for r in prev_records if r.get("tx_hash") not in fresh_hashes]
     existing = read_transactions_rows(notion, config)
     known_projects = read_project_wallets(notion, config)
 
@@ -868,13 +867,18 @@ def _tx_properties(config: dict, row: dict) -> dict:
 
 def apply_main(notion: Any, config: dict, records: list[dict],
                only: list[str] | None = None) -> dict:
-    """把 missing/mismatched 写入 transactions 表并回读校验；绝不删除 extra 行。"""
+    """只新增缺失交易；已有行（含手填历史）绝不更新或删除。
+
+    链上结果可能只反映 CKB capacity，无法可靠重建已下线稳定币等历史资产的
+    人工记账语义。因此同一 tx_hash 已存在时，即使字段不一致也仅报告 preserved，
+    不把自动推导值写回 Notion。
+    """
     from .notion import values_match
     existing = read_transactions_rows(notion, config)
     known_projects = read_project_wallets(notion, config)
     withdrawal = config["select_values"]["withdrawal"]
     wanted = {str(x) for x in (only or [])}
-    created, updated, skipped, errors = [], [], [], []
+    created, updated, skipped, preserved, errors = [], [], [], [], []
     for record in records or []:
         tx_hash = record.get("tx_hash") or ""
         if not tx_hash or (wanted and tx_hash not in wanted):
@@ -898,15 +902,21 @@ def apply_main(notion: Any, config: dict, records: list[dict],
                 if not stale:
                     skipped.append(tx_hash)
                     continue
-                update_props = {key: value for key, value in properties.items()
-                                if key != _prop(config, "transactions", "title")}
-                page = notion.update_page(current["id"], update_props)
-                _verify_row(notion, current["id"], update_props)
-                updated.append(tx_hash)
+                preserved.append({"tx_hash": tx_hash, "fields": sorted(stale)})
         except Exception as exc:
             errors.append({"tx_hash": tx_hash, "error": str(exc)})
     return {"created": created, "updated": updated, "skipped": skipped,
-            "errors": errors, "deleted": []}
+            "preserved": preserved, "errors": errors, "deleted": []}
+
+
+def main_records_for_apply(rpc: ChainRPC, limit: int = 500,
+                           cache_path: Any = None) -> list[dict]:
+    """合并当前链上结果与历史缓存，供用户确认后的追加写入使用。"""
+    fresh = fetch_main_wallet_records(rpc, limit=limit)
+    previous = ((load_scan_cache(cache_path).get("main") or {}).get("records") or [])
+    fresh_hashes = {row.get("tx_hash") for row in fresh if row.get("tx_hash")}
+    return fresh + [row for row in previous
+                    if row.get("tx_hash") and row.get("tx_hash") not in fresh_hashes]
 
 
 def deposit_of(config: dict) -> str:

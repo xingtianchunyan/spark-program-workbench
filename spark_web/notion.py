@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
@@ -241,6 +243,10 @@ def property_value(page: dict, name: str) -> Any:
         return "".join(item.get("plain_text", "") for item in (value or []))
     if kind == "select":
         return (value or {}).get("name")
+    if kind == "status":
+        return (value or {}).get("name")
+    if kind == "multi_select":
+        return [(item or {}).get("name", "") for item in (value or [])]
     if kind == "date":
         return (value or {}).get("start")
     if kind == "url":
@@ -252,25 +258,40 @@ def property_value(page: dict, name: str) -> Any:
     return value
 
 
-def _digits(value: Any) -> str:
-    import re
-    return "".join(re.findall(r"\d+", str(value or "")))
+def _parse_amount(value: Any) -> tuple[Decimal, str] | None:
+    """Parse an amount without discarding currency or decimal separators.
 
-
-def _is_amount_like(*values: Any) -> bool:
-    text = " ".join(str(v or "") for v in values)
-    return ("," in text) or any(token in text.upper() for token in ("CKB", "USD", "CNY", "$"))
+    The previous implementation compared only digits, so ``10.00 CKB`` and
+    ``1,000 USD`` could both collapse to ``1000``.  A failed/ambiguous parse is
+    deliberately not treated as an amount and falls back to strict matching.
+    """
+    text = str(value or "").strip().upper()
+    currency = ""
+    if "$" in text or re.search(r"\bUSD\b", text):
+        currency = "USD"
+    elif re.search(r"\bCKB\b", text):
+        currency = "CKB"
+    elif re.search(r"\b(?:CNY|RMB)\b", text) or "¥" in text or "￥" in text:
+        currency = "CNY"
+    else:
+        return None
+    match = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", text)
+    if not match:
+        return None
+    number = match.group(0).replace(",", "")
+    try:
+        return Decimal(number), currency
+    except InvalidOperation:
+        return None
 
 
 def values_match(wanted: Any, actual: Any) -> bool:
-    """字段等价判断：金额类字段做格式化归一化，其余严格相等。"""
+    """字段等价判断：金额同时比较数值和币种，其余严格相等。"""
     if str(actual or "") == str(wanted or ""):
         return True
-    digits_wanted = _digits(wanted)
-    if (digits_wanted and len(digits_wanted) >= 3 and _is_amount_like(wanted, actual)
-            and digits_wanted == _digits(actual)):
-        return True
-    return False
+    wanted_amount = _parse_amount(wanted)
+    actual_amount = _parse_amount(actual)
+    return bool(wanted_amount and actual_amount and wanted_amount == actual_amount)
 
 
 def assert_properties(page: dict, expected: dict[str, Any]) -> None:

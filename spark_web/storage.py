@@ -311,7 +311,7 @@ class Store:
         with self.transaction() as conn:
             conn.execute("""INSERT INTO external_records(system,object_type,natural_key,remote_id,checksum,created_at)
                 VALUES(?,?,?,?,?,?) ON CONFLICT(system,object_type,natural_key) DO UPDATE SET
-                remote_id=excluded.remote_id,checksum=excluded.checksum""",
+                remote_id=excluded.remote_id,checksum=COALESCE(excluded.checksum,external_records.checksum)""",
                 (system, object_type, natural_key, remote_id, value_checksum, utcnow()))
 
     def get_external(self, system: str, object_type: str, natural_key: str) -> dict | None:

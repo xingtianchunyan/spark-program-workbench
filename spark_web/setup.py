@@ -13,6 +13,7 @@ from .notion import NotionClient, NotionError
 
 
 LOG_PATH = ENV_PATH.parent / "setup-notion.log"
+IDENTITY_PROPERTY_KEYS = {"topic_id", "proposal_url"}
 
 
 def write_failure_log(message: str, details: str = "") -> None:
@@ -72,10 +73,18 @@ def main() -> None:
     for name, data_source_id in config["data_sources"].items():
         source = client.retrieve_data_source(data_source_id)
         properties = source.get("properties") or {}
-        expected_names = set((config.get("properties", {}).get(name) or {}).values())
+        configured = config.get("properties", {}).get(name) or {}
+        expected_names = {value for key, value in configured.items()
+                          if key not in IDENTITY_PROPERTY_KEYS}
         missing = sorted(expected_names - set(properties))
         if missing:
             raise SystemExit(f"{name} 缺少字段: {', '.join(missing)}")
+        identity_missing = [configured[key] for key in IDENTITY_PROPERTY_KEYS
+                            if key in configured and configured[key] not in properties]
+        if identity_missing:
+            client.update_data_source(data_source_id,
+                                      {value: {"rich_text": {}} for value in identity_missing})
+            print(f"✓ {name}: 已增加稳定身份字段 {', '.join(identity_missing)}")
         print(f"✓ {name}: {source.get('id')}")
     select_checks = {
         "fund_allocations": [(config["properties"]["fund_allocations"]["status"], config["select_values"]["ongoing"])],

@@ -132,6 +132,7 @@ def apply_whitelist(board: dict, whitelist: dict) -> dict:
             if not any(str(p.get("id")) == topic_id for p in classified[bucket]):
                 classified[bucket].append(post)
     board["classified"] = classified
+    board["board_whitelist"] = dict(whitelist or {})
     return board
 
 
@@ -237,10 +238,34 @@ def merged_templates() -> dict:
         text = custom.get("template", "") if isinstance(custom, dict) else str(custom)
         if name in merged:
             merged[name]["template"] = text
+            if isinstance(custom, dict) and "desc" in custom:
+                merged[name]["desc"] = custom["desc"]
         else:
             merged[name] = {"desc": (custom.get("desc", "") if isinstance(custom, dict) else ""),
                             "template": text}
     return merged
+
+
+def save_template(name: str, original: str, desc: str, content: str) -> dict:
+    name, original = str(name or "").strip(), str(original or "").strip()
+    if not name or len(name) > 120:
+        raise ValueError("模板名称不能为空且不能超过 120 字")
+    if not str(content or "").strip() or len(content) > 100_000:
+        raise ValueError("模板内容不能为空且不能超过 100000 字")
+    if len(desc) > 2000:
+        raise ValueError("模板说明不能超过 2000 字")
+    merged = merged_templates()
+    if original and original not in merged:
+        raise ValueError("原模板不存在，请刷新页面后重试")
+    if name != original and name in merged:
+        raise ValueError("模板名称已存在")
+    data = load_data()
+    custom = data.setdefault("templates", {})
+    if original and original != name:
+        custom.pop(original, None)  # 内置模板保持原样；只迁移用户自定义覆盖。
+    custom[name] = {"desc": desc, "template": content}
+    save_data(data)
+    return {"ok": True, "name": name}
 
 
 def parse_post_from_topic(topic: dict) -> dict:
@@ -294,10 +319,12 @@ _CKBRATE_CACHE: tuple[float, float | None, float | None] = (0.0, None, None)
 
 def get_ckb_usd_rate() -> tuple[float | None, float | None]:
     """CKB/USD 实时汇率（CoinGecko），结果缓存 30 分钟。返回 (ckb_price_usd, rate)。"""
+    global _CKBRATE_CACHE
     import time
     import urllib.request
     now = time.time()
-    cached_at, price, rate = _CKBRATE_CACHE
+    with _LOCK:
+        cached_at, price, rate = _CKBRATE_CACHE
     if price and now - cached_at < 1800:
         return price, rate
     try:
@@ -308,7 +335,8 @@ def get_ckb_usd_rate() -> tuple[float | None, float | None]:
         price = data.get("nervos-network", {}).get("usd", 0)
         if price and price > 0:
             rate = 1.0 / price
-            _CKBRATE_CACHE = (now, price, rate)
+            with _LOCK:
+                _CKBRATE_CACHE = (now, price, rate)
             return price, rate
     except Exception:
         pass
@@ -737,11 +765,53 @@ def build_ai_prompt(payload: dict) -> tuple[str, str, str]:
 
 
 def timeline(board: dict) -> list[dict]:
+    return sorted(_all_cached_posts(board), key=lambda x: x.get("created_at", ""), reverse=True)
+
+
+def _all_cached_posts(board: dict | None = None) -> list[dict]:
+    """合并标签抓取、分区分类与白名单后的完整帖子集合。"""
+    board = board if board is not None else load_cache()
     posts: dict[str, dict] = {}
-    for items in board.get("all_posts", {}).values():
-        for post in items:
-            posts[str(post.get("id"))] = post
-    return sorted(posts.values(), key=lambda x: x.get("created_at", ""), reverse=True)
+    for items in (board.get("all_posts") or {}).values():
+        for post in items or []:
+            if post.get("id") is not None:
+                posts[str(post["id"])] = post
+    classified = board.get("classified") or {}
+    for key in ("submitted", "pending", "in_progress", "rejection", "completion", "closure"):
+        for post in classified.get(key) or []:
+            if post.get("id") is not None:
+                posts[str(post["id"])] = post
+    for items in (classified.get("spark_program") or {}).values():
+        for post in items or []:
+            if post.get("id") is not None:
+                posts[str(post["id"])] = post
+    return list(posts.values())
+
+
+_PROJECT_NOISE = {"spark", "program", "proposal", "project", "mini", "grant", "the", "a", "an"}
+
+
+def _project_words(value: str) -> list[str]:
+    text = re.sub(r"<[^>]+>|https?://\S+", " ", str(value or "").lower())
+    text = text.replace("wi-fi", "wifi")
+    return [word for word in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text)
+            if word not in _PROJECT_NOISE and len(word) > 1]
+
+
+def _project_match_score(project_name: str, post: dict) -> float:
+    explicit = re.search(r"(?:/t/(?:[^/]+/)?|#)(\d{3,})", project_name or "")
+    if explicit:
+        return 100.0 if str(post.get("id")) == explicit.group(1) else -1.0
+    wanted, title = _project_words(project_name), _project_words(post.get("title", ""))
+    if not wanted or not title:
+        return 0.0
+    compact_wanted, compact_title = "".join(wanted), "".join(title)
+    if compact_wanted in compact_title or compact_title in compact_wanted:
+        return 10.0 + min(len(compact_wanted), len(compact_title)) / 100
+    overlap = set(wanted) & set(title)
+    if len(overlap) < min(2, len(set(wanted))):
+        return 0.0
+    return len(overlap) / len(set(wanted)) + len(overlap) / len(set(title))
 
 
 def new_meeting(payload: dict) -> dict:
@@ -1007,20 +1077,19 @@ def parse_meeting_text(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def find_post_by_project_name(project_name: str) -> str:
-    """从看板缓存中查找与项目名称匹配的帖子 URL。"""
+    """从完整看板缓存中按 topic ID / 规范化标题查找最佳帖子 URL。"""
     if not project_name:
         return ""
     cache = load_cache()
     if not cache:
         return ""
-    all_posts = cache.get("all_posts", {})
-    proj_lower = project_name.lower().strip()
-    for tag_posts in all_posts.values():
-        for post in tag_posts:
-            title = (post.get("title") or "").lower()
-            if proj_lower in title or title in proj_lower:
-                return post.get("url", "")
-    return ""
+    scored = sorted(((_project_match_score(project_name, post), post)
+                     for post in _all_cached_posts(cache)), key=lambda item: item[0], reverse=True)
+    if not scored or scored[0][0] <= 0:
+        return ""
+    if len(scored) > 1 and scored[0][0] < 10 and abs(scored[0][0] - scored[1][0]) < 0.05:
+        return ""  # 模糊同分时宁可留空，避免错链
+    return scored[0][1].get("url", "")
 
 
 def refresh_resolution_posts(meeting_id: str) -> dict:

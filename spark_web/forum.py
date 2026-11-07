@@ -48,24 +48,22 @@ def fetch_topic(topic_id: str) -> dict:
         total = 0
     if total > len(by_id):
         step = 15  # 窗口约 20 楼，步长 15 保证相邻窗口有重叠
-        stale_rounds = 0
         number = total
-        while number >= 1 and len(by_id) < total and stale_rounds < 2:
+        # Discourse windows overlap. Two consecutive windows without new posts
+        # do not prove there are no older committee decisions to fetch.
+        while number >= 1 and len(by_id) < total:
             try:
                 window = _request_json(f"{TALK_ORIGIN}/t/{topic_id}/{number}.json")
-            except Exception:
+            except Exception as exc:
+                topic["_fetch_error"] = str(exc)
                 break
-            added = 0
             for post in window.get("post_stream", {}).get("posts", []):
                 key = post.get("id")
                 if key not in by_id:
                     by_id[key] = post
-                    added += 1
-            if added == 0:
-                stale_rounds += 1
-            else:
-                stale_rounds = 0
             number -= step
+        if len(by_id) < total:
+            topic["_fetch_incomplete"] = True
         topic.setdefault("post_stream", {})["posts"] = sorted(
             by_id.values(), key=lambda p: p.get("post_number", 0))
     return topic

@@ -1,7 +1,7 @@
 # Spark Program 判例案例库
 
 > 由 build_precedents.py 自动生成（数据源：工具内会议纪要），请勿手工编辑本文件的项目时间线部分。
-> 生成时间：2026-09-23 23:50
+> 生成时间：2026-10-30 15:51
 > 用途：AI 起草/预审时召回同类案例，让回复"言之有物"（参照此前 XX 项目的处理方式）。
 
 ## 典型判例速查（人工维护）
@@ -33,6 +33,15 @@
 | 2026-08-11 | 通过 |  | 已经说了欢迎他 |
 
 帖子: https://talk.nervos.org/t/spark-program-atlantik-community-full-node/10390
+
+### Bees Network（最近状态：待定）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-27 | 待定 |  | （1）奖励池的来源（经济模型如何实施） （2）观察真实性验证不可靠，钱包签名、Merkle证明、链上领取交易不能代表观察真实性验证 |
+| 2026-10-27 | 待定 |  | （1）奖励池的来源（经济模型如何实施） （2）观察真实性验证不可靠，钱包签名、Merkle证明、链上领取交易不能代表观察真实性验证 |
+
+帖子: https://talk.nervos.org/t/spark-program-bees-network-decentralized-observation-layer-for-ai-agents-on-ckb/11015
 
 ### CCC Vibe-Coding Scaffold（最近状态：拒绝）
 
@@ -190,6 +199,15 @@
 
 帖子: https://talk.nervos.org/t/spark-program-ckb-ugmp-a-universal-spore-dob-seamless-minting-infrastructure-prototype-on-ckb-ckb-spore-dob/10098
 
+### CKB Wallet Behaviour（最近状态：讨论）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-27 | 讨论 |  | 成功完项，编辑报告 |
+| 2026-10-27 | 讨论 |  | 成功完项，编辑报告 |
+
+帖子: https://talk.nervos.org/t/spark-program-ckb-wallet-behaviour-intelligence/10338
+
 ### CKB-lint（最近状态：拒绝）
 
 | 日期 | 决议 | 预算 | 要点 |
@@ -207,8 +225,30 @@
 | 2026-08-11 | 通过 |  | 尽快通知立项 |
 | 2026-09-08 | 讨论 |  | 周四滴滴 |
 | 2026-09-22 | 讨论 |  | 关心 |
+| 2026-10-27 | 讨论 |  | 后续再定 |
+| 2026-10-27 | 讨论 |  | 后续再定 |
 
 帖子: https://talk.nervos.org/t/spark-program-ckb-vm-sail-formal-verification-proving-ckb-vm-risc-v-instruction-equivalence-via-sail-specification-and-coq-theorem-prover-ckb-vm-sail-sail-coq-ckb-vm-risc-v/10214
+
+### Corven（最近状态：待定）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-07-28 | 拒绝 |  | 经过委员会的判断，该项目的雄心壮志值得肯定，一旦完成很有可能全面改变CKB开发者们的体验。该项目的经济模型较大，不应该申请Spark的小额资助， 建议到Community Fund DAO 申请立项。 |
+| 2026-08-11 | 待定 |  | 待对方回复 |
+| 2026-08-18 | 拒绝 |  | 修改后提案已审阅，维持原决议，继续。 |
+| 2026-10-08 | 待定 |  | (1) 请说明交付物预期产出是什么， (2) 目前网址打不开，委员会需要知道该项目的实际情况能否支持活动完成。 (3) 如果最终的报告和测试数据和反馈没有达到委员会的要求，委员会将不会同意结项。 |
+| 2026-10-19 | 待定 |  | （1）请申请人确认第一次远程会议的情况：这次的差旅费、移动流量包等费用是否还在报销范围之内。 （2）在第一次是远程会议的情况下，是否还能达到提案目标中预设的数据。 |
+| 2026-10-27 | 待定 |  | 询问预算调整细节，委员会未发现具体改动 |
+| 2026-10-27 | 待定 |  | 询问预算调整细节，委员会未发现具体改动 |
+
+帖子: https://talk.nervos.org/t/spark-program-proposal-corven-cloud-native-ide/10807
+
+### Create-passkey（最近状态：拒绝）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-27 | 拒绝 |  | 。虚假需求。 |
 
 ### Corven（最近状态：拒绝）
 
@@ -225,6 +265,33 @@
 | 日期 | 决议 | 预算 | 要点 |
 |------|------|------|------|
 | 2026-09-22 | 待定 |  | 鼓励，请申请人完善安全模型 8. Spark Verify 因长时间无互动关闭帖子，后续可重新提案。 |
+
+帖子: https://talk.nervos.org/t/spark-program-ckb-revocable-timelock-crt-timelock-encryption-you-can-cancel/10698
+
+### DAO Cycle（最近状态：待定）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-27 | 待定 |  | 无动态，暂时保留状态 |
+| 2026-10-27 | 待定 |  | 无动态，暂时保留状态 |
+
+帖子: https://talk.nervos.org/t/spark-program-dao-cycle-alerts-telegram-reminders-before-your-nervos-dao-cycle-ends/10789
+
+### DAO Cycle Alert（最近状态：待定）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-08 | 待定 |  | 等待申请人回复 |
+
+帖子: https://talk.nervos.org/t/spark-program-dao-cycle-alerts-telegram-reminders-before-your-nervos-dao-cycle-ends/10789
+
+### DAO Cycle Alerts（最近状态：待定）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-19 | 待定 |  | 本周申请人仍未回复，暂待回复 |
+
+帖子: https://talk.nervos.org/t/spark-program-dao-cycle-alerts-telegram-reminders-before-your-nervos-dao-cycle-ends/10789
 
 ### DevLaunch Kit（最近状态：拒绝）
 
@@ -299,6 +366,12 @@
 
 帖子: https://talk.nervos.org/t/spark-program-fiber-checkout-a-stripe-style-react-payment-library-for-fiber-network/10045/33
 
+### Fiber Mystery Shopper（最近状态：拒绝）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-19 | 拒绝 |  | 委员会希望申请人能加深思考，发现真实的需求。 |
+
 ### Fiber Pay Studio（最近状态：拒绝）
 
 | 日期 | 决议 | 预算 | 要点 |
@@ -327,6 +400,13 @@
 | 2026-07-28 | 拒绝 |  | - 开发者存在冒名顶替的风险（首席开发者的GitHub仓库中保存的推特信息和开发者在提案帖子中的推特账号无法匹配） - 提案内容混乱 |
 
 帖子: https://talk.nervos.org/t/spark-program-fiber-submarine-swap-service/10516
+
+### Fiber WiFi（最近状态：待定）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-27 | 待定 |  | （1）对方向认可。 （2）交付物中增加一个可供社区成员验证的MVP 12. 拒绝。虚假需求。 |
+| 2026-10-27 | 待定 |  | （1）对方向认可。 （2）交付物中增加一个可供社区成员验证的MVP |
 
 ### FiberPass（最近状态：拒绝）
 
@@ -368,11 +448,12 @@
 
 帖子: https://talk.nervos.org/t/spark-program-joyid-connect-portable-session-auth-across-ckb-dapps/10577
 
-### LiquidLane（最近状态：待定）
+### LiquidLane（最近状态：拒绝）
 
 | 日期 | 决议 | 预算 | 要点 |
 |------|------|------|------|
 | 2026-09-08 | 待定 |  | 给 ① 资金托管的安全问题会如何处理？做流动性池并非仅解决技术问题即可。 ②关于可持续性的担忧。对于流动性池项目，委员会没有看到池内的流动性从何而来？ |
+| 2026-10-08 | 拒绝 |  | ion (1) 安全问题未能得到充分考虑 (2) 技术实现相对粗糙（接口未联通，钱包链接器未使用CCC，而仅连接JoyID） (3) 对于这个基础设施类项目，委员会未看到申请人的长期运营意愿 (4) 建议申请人不要把目标强行固定在需要非常多经验的底层基础设施上，鼓励他进行应用层的开发 |
 
 帖子: https://talk.nervos.org/t/liquidlane-lp-backed-fiber-channel-liquidity/10686
 
@@ -383,6 +464,12 @@
 | 2026-09-15 | 拒绝 |  | 理由：资金安全与托管的方案相对粗糙，并不能真实解决委员会提出的问题 |
 
 帖子: https://talk.nervos.org/t/liquidlane-lp-backed-fiber-channel-liquidity/10686
+
+### MatchLock（最近状态：拒绝）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-19 | 拒绝 |  | 希望申请人能够考虑社区中真实存在的需求，并给出能够切实满足需求的方案。 |
 
 ### Mobile-Core（最近状态：拒绝）
 
@@ -417,6 +504,9 @@
 | 2026-09-01 | 通过 |  | 同意，理解硬件成本上涨，为了保证资助的激励性和保护社区预期，委员会愿意分段支付（①首笔20%，②首月运营结束并委员会评审后根据硬件成本实报实销50%硬件成本+后两个月运营成本。③项目成功后支付剩余硬件费用）。 |
 | 2026-09-08 | 通过 |  | 建立多签钱包以及 |
 | 2026-09-22 | 讨论 |  | 滴滴 |
+| 2026-10-19 | 讨论 |  | 确认当前节点状态，确认开始一个月试运营计时的开始时间。 3. 委员会希望提升社区参与度，邀请补充面向非技术社区成员的文档 4. 委员会没有更多意见，邀请申请人将最终的说明放到GitHub仓库中，保持交付物在GitHub和Talk论坛内容的一致性。一旦收到完成通知，即可批准成功结项。 5. 听说参与了… |
+| 2026-10-27 | 讨论 |  | 委员会无意见 |
+| 2026-10-27 | 讨论 |  | 委员会无意见 |
 
 帖子: https://talk.nervos.org/t/spark-program-nncbn-nervos-network-community-boot-nodes/10653
 
@@ -445,6 +535,27 @@
 
 帖子: https://talk.nervos.org/t/spark-program-fiber-rgb-swap/10487
 
+### RGB++ Resume（最近状态：拒绝）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-19 | 拒绝 |  | 需求真实存在，但关系到RGB++交易的稳定性，不应该由第三方提供服务。 |
+
+### Seed Song（最近状态：通过）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-19 | 通过 |  | ！ |
+
+### SeedSong（最近状态：通过）
+
+| 日期 | 决议 | 预算 | 要点 |
+|------|------|------|------|
+| 2026-10-27 | 通过 |  | 第二笔资助 |
+| 2026-10-27 | 通过 |  | 第二笔资助 |
+
+帖子: https://talk.nervos.org/t/spark-program-seedsspark-program-seedsong-on-chain-generative-music-with-spore-dob-and-light-client-wasmong-spore-dob-light-client-wasm/10997
+
 ### SPark Verify（最近状态：待定）
 
 | 日期 | 决议 | 预算 | 要点 |
@@ -459,6 +570,10 @@
 |------|------|------|------|
 | 2026-08-25 | 待定 |  | 等待申请人回复 |
 | 2026-09-08 | 待定 |  | 保持 |
+| 2026-10-08 | 通过 |  | 请开发者拍视频来讲解该项目的用法，目前委员会难以确定该工具的定位。 |
+| 2026-10-19 | 待定 |  | 由Hanssen与申请人沟通 |
+| 2026-10-27 | 待定 |  | Hanssen 抽空沟通 |
+| 2026-10-27 | 待定 |  | Hanssen 抽空沟通 |
 
 帖子: https://talk.nervos.org/t/spark-program-spark-verify-reproducible-acceptance-checks-for-ckb-projects/10598
 
@@ -498,6 +613,9 @@
 | 2026-09-08 | 讨论 |  | 委员会希望了解“Lock script implementing the corrected owner-op path only”的具体含义。 |
 | 2026-09-15 | 通过 |  | 批准立项，并进行首期。在时申明委员会的最终验收标准是该项目提供完整功能的前端和SDK。 Pending ： |
 | 2026-09-22 | 讨论 |  | 滴滴 |
+| 2026-10-19 | 讨论 |  |  |
+| 2026-10-27 | 讨论 |  | 委员会无意见 |
+| 2026-10-27 | 讨论 |  | 委员会无意见 |
 
 帖子: https://talk.nervos.org/t/tranfr-programmable-recovery-for-ckb/10644
 
@@ -510,7 +628,7 @@
 
 帖子: https://talk.nervos.org/t/spark-program-vibequest-turning-ai-assisted-coding-into-real-learning/10446
 
-### Wallet Behaviour（最近状态：待定）
+### Wallet Behaviour（最近状态：讨论）
 
 | 日期 | 决议 | 预算 | 要点 |
 |------|------|------|------|
@@ -523,6 +641,7 @@
 | 2026-09-08 | 讨论 |  | ① 延迟很正常，但应该有按时的披露。哪怕遇到了非常大的挑战或者踩到了非常大的坑，都可以把信息公开到社区，这些失败的经验教训对于社区也是宝贵的财富，但我们维度不能接受杳无音讯。 ② 给一个最后时限（到本周末） |
 | 2026-09-15 | 讨论 |  | 肯定工程价值，也理解无法达成初始目标的情况，但开发者团队需要将自己发布在GitHub中的主张放到 Talk 论坛中，作为自己当前路径的支撑。 |
 | 2026-09-22 | 待定 |  | 完项申请 |
+| 2026-10-08 | 讨论 |  | 委员会未能找到在 5.1 组定义特征中的特征字段具体是什么含义? 如果已经说明，请将自然语言描述的含义发在Nervos Talk。 2. NNCBN，Tranfr，CKB-VM 鼓励+关心 |
 
 帖子: https://talk.nervos.org/t/spark-program-ckb-wallet-behaviour-intelligence/10338
 
@@ -534,7 +653,7 @@
 
 帖子: https://talk.nervos.org/t/spark-program-fiber-network-payment-gateway-for-woocommerce/10500
 
-### zk-Lock（最近状态：完成）
+### zk-Lock（最近状态：讨论）
 
 | 日期 | 决议 | 预算 | 要点 |
 |------|------|------|------|
@@ -542,5 +661,8 @@
 | 2026-08-11 | 通过 |  | 上次决议通过，会尽快联系他立项 |
 | 2026-09-08 | 讨论 |  | 周四滴滴 |
 | 2026-09-22 | 完成 |  | 委员会仍在审核交付物 ①鼓励多做探索 ②委员会对于合并事宜并不提出意见，这是申请人的权利。 ③希望能给社区留下参与的通道，以及保留沉淀下来的经验和智慧，而不是仅仅通过AI的或者委员会的验证。 |
+| 2026-10-08 | 讨论 |  | 委员会很高兴看到开发者与社区内其它开发者互动，但委员会表达的增加社区参与是希望向社区中的非技术开发者说明zk-lock有哪些使用场景，如何使用，以及使用后能够达到何种效果。 另外，委员会希望有一个可交互的前端（哪怕很简陋），将SDK以及合约整合起来，以便社区成员（包括没有开发经验的社区成员）能够参与… |
+| 2026-10-27 | 讨论 |  | 关心申请人身体 |
+| 2026-10-27 | 讨论 |  | 关心申请人身体 |
 
 帖子: https://talk.nervos.org/t/spark-program-zk-lock-for-ckb/10448

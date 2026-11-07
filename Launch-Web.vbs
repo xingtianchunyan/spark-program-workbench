@@ -1,7 +1,7 @@
 Option Explicit
 
 Dim shell, fso, folder, batchPath, logPath, markerPath, runtimePath
-Dim nonce, url, runtimeNonce, runtimeVersion, stream, line, key, value, i, ready
+Dim nonce, url, runtimeNonce, stream, line, key, value, i, ready
 
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -25,7 +25,6 @@ For i = 1 To 30
     WScript.Sleep 500
     url = ""
     runtimeNonce = ""
-    runtimeVersion = ""
     If fso.FileExists(runtimePath) Then
         Set stream = fso.OpenTextFile(runtimePath, 1, False)
         Do Until stream.AtEndOfStream
@@ -35,12 +34,14 @@ For i = 1 To 30
                 value = Trim(Mid(line, InStr(line, "=") + 1))
                 If key = "url" Then url = value
                 If key = "nonce" Then runtimeNonce = value
-                If key = "version" Then runtimeVersion = value
             End If
         Loop
         stream.Close
     End If
-    If url <> "" And runtimeNonce = nonce And runtimeVersion = "2.6.1" Then
+    ' The nonce already proves that this runtime file belongs to this launch.
+    ' Do not hard-code an application version here; doing so broke every later
+    ' package even when the server itself had started successfully.
+    If url <> "" And runtimeNonce = nonce Then
         ready = True
     End If
     If ready Then Exit For

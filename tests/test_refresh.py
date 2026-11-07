@@ -1,5 +1,9 @@
 import tempfile
+import json
+import threading
 import unittest
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +31,11 @@ class _Automation:
         self.store = store
         self.resumed = []
         self.completed = []
+        self.reconciled = 0
+
+    def reconcile_notion(self, actor):
+        self.reconciled += 1
+        return {"matched_projects": [], "verified_jobs": [], "conflicts": []}
 
     def execute_new_project(self, payload, actor):
         self.resumed.append(str(payload["topic_id"]))
@@ -44,6 +53,49 @@ class _Automation:
 
 
 class RefreshTests(unittest.TestCase):
+    def test_whitelisted_applicant_article_does_not_seed_or_queue_notion_workflow(self):
+        article = {"id": 10101, "title": "UGMP 开发心得", "url": "https://talk.nervos.org/t/x/10101",
+                   "author": "builder", "tags": ["spark-program"], "posts_count": 3}
+        class Tracker:
+            @staticmethod
+            def fetch_nervos_talk_projects():
+                return {"all_posts": {"spark": [article]}, "classified": {"completion": [article],
+                        "in_progress": [], "closure": [], "spark_program": {}}, "errors": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "test.db")
+            with patch.object(server, "STORE", store), patch.object(server, "tracker_module", return_value=Tracker), \
+                 patch.object(server, "NOTION_TOKEN", ""), patch.object(server.legacy, "save_cache"), \
+                 patch.object(server.legacy, "load_data", return_value={"board_whitelist": {"10101": "completion"}}), \
+                 patch.object(server, "fetch_topic", side_effect=AssertionError("related post must not be fetched for automation")):
+                result = server.refresh_board("test")
+            self.assertEqual(store.query("SELECT * FROM projects"), [])
+            self.assertEqual(store.query("SELECT * FROM sync_jobs"), [])
+            self.assertEqual(result["transitions"], [])
+
+    def test_timeline_refresh_http_route_does_not_reconcile_notion(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with patch.object(server, "TEAM_MODE", False), \
+                 patch.object(server, "tracker_module", return_value=_Tracker), \
+                 patch.object(server, "automation", side_effect=AssertionError("Notion must not run")), \
+                 patch.object(server.legacy, "save_cache") as save_cache, \
+                 patch.object(server.legacy, "load_data", return_value={}), \
+                 patch.object(server.STORE, "audit"):
+                request = urllib.request.Request(url + "/api/timeline/refresh", data=b"{}",
+                                                 method="POST", headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    result = json.load(response)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(len(result["timeline"]), 3)
+                save_cache.assert_called_once()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_refresh_resumes_partial_project_and_migrates_existing_completions(self):
         original_data_path = storage.DATA_PATH
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,6 +120,7 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(set(runner.completed), {"10212", "10385"})
         self.assertEqual(set(result["transitions"]), {"10212", "10385"})
         self.assertFalse(result["errors"])
+        self.assertEqual(runner.reconciled, 1)
 
     def _run_refresh(self, store, runner):
         patches = [
@@ -139,6 +192,30 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(runner.resumed, [])
         self.assertFalse(result["new_projects"])
         self.assertFalse(result["errors"])
+
+    def test_refresh_stops_all_writes_when_identity_reconcile_fails(self):
+        class BrokenAutomation(_Automation):
+            def reconcile_notion(self, actor):
+                raise RuntimeError("schema unavailable")
+
+        original_data_path = storage.DATA_PATH
+        with tempfile.TemporaryDirectory() as tmp:
+            storage.DATA_PATH = Path(tmp) / "missing.json"
+            store = Store(Path(tmp) / "test.db")
+            store.upsert_project("10653", "NNCBN", "https://talk.nervos.org/t/x/10653",
+                                 "in_progress", 2)
+            key = store.queue_job("10653", "in_progress", {"topic_id": "10653",
+                                                             "project_name": "NNCBN"})
+            store.set_step(key, "project_list", "failed", [], "interrupted")
+            runner = BrokenAutomation(store)
+            try:
+                result = self._run_refresh(store, runner)
+            finally:
+                storage.DATA_PATH = original_data_path
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(any("已停止本轮自动写入" in error for error in result["errors"]))
+        self.assertEqual(runner.resumed, [])
+        self.assertEqual(runner.completed, [])
 
 
 if __name__ == "__main__":

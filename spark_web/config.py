@@ -7,12 +7,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD_VERSION = "2.6.1"
+BUILD_VERSION = "2.9.4"
 ENV_PATH = ROOT / ".env"
 WORKSPACE_CONFIG_PATH = ROOT / "notion_workspace.json"
 DATA_PATH = ROOT / "spark_task_data.json"
 CACHE_PATH = ROOT / "spark_project_cache.json"
 DB_PATH = ROOT / "spark_workbench.db"
+PROJECT_TRACKING_PATH = ROOT / "project_tracking.json"
 
 
 def load_env(path: Path = ENV_PATH) -> dict[str, str]:

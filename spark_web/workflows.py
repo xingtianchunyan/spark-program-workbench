@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import datetime as dt
+import unicodedata
 from typing import Any
 
 from .notion import (
@@ -37,6 +39,7 @@ class NotionAutomation:
         self.ds = config["data_sources"]
         self.props = config["properties"]
         self.select = config["select_values"]
+        self._identity_schema_ready = False
 
     def _append_sequence_once(self, page_id: str, blocks: list[dict]) -> list[dict]:
         """Append only when the same semantic block sequence is not already present remotely."""
@@ -110,8 +113,10 @@ class NotionAutomation:
 
     @staticmethod
     def _norm_title(value: str) -> str:
-        """匹配用归一化标题：简化项目名（去 Spark Program 前缀）后忽略大小写。"""
-        return _simplify_project_name(value).casefold()
+        """Canonical fallback key used only when stable identity is unavailable."""
+        value = unicodedata.normalize("NFKC", _simplify_project_name(value)).casefold()
+        value = value.replace("\u200b", "").replace("\ufeff", "")
+        return "".join(ch for ch in value if ch.isalnum())
 
     @staticmethod
     def _normalize_payload_name(payload: dict) -> dict:
@@ -121,68 +126,317 @@ class NotionAutomation:
         normalized["project_name"] = _simplify_project_name(payload.get("project_name") or "")
         return normalized
 
+    def ensure_identity_schema(self) -> None:
+        """Ensure durable topic identity columns exist in the three project tables."""
+        if self._identity_schema_ready:
+            return
+        if self.store.get_meta("notion_identity_schema_v1"):
+            self._identity_schema_ready = True
+            return
+        # Lightweight fakes used by embedders may not expose schema management.
+        if not hasattr(self.notion, "retrieve_data_source"):
+            self._identity_schema_ready = True
+            return
+        for source_key in ("fund_allocations", "ongoing_projects", "completed_projects"):
+            configured = self.props[source_key]
+            wanted = [configured[key] for key in ("topic_id", "proposal_url") if key in configured]
+            if not wanted:
+                continue
+            source = self.notion.retrieve_data_source(self.ds[source_key])
+            existing = source.get("properties") or {}
+            missing = [name for name in wanted if name not in existing]
+            if missing:
+                self.notion.update_data_source(
+                    self.ds[source_key], {name: {"rich_text": {}} for name in missing})
+        self.store.set_meta("notion_identity_schema_v1", utcnow())
+        self._identity_schema_ready = True
+
+    def _identity_values(self, source_key: str, payload: dict) -> dict[str, str]:
+        configured = self.props[source_key]
+        values: dict[str, str] = {}
+        if configured.get("topic_id") and payload.get("topic_id"):
+            values[configured["topic_id"]] = str(payload["topic_id"])
+        if configured.get("proposal_url") and payload.get("proposal_url"):
+            values[configured["proposal_url"]] = str(payload["proposal_url"])
+        return values
+
+    def _external_type(self, source_key: str) -> str | None:
+        return {"fund_allocations": "fund_allocation", "ongoing_projects": "ongoing_project",
+                "completed_projects": "completed_project"}.get(source_key)
+
+    def _find_rows_by_identity(self, source_key: str, payload: dict,
+                               rows: list[dict] | None = None) -> list[dict]:
+        """Match by saved page id, topic id, proposal URL, then canonical title."""
+        rows = rows if rows is not None else self.notion.query(self.ds[source_key])
+        topic_id = str(payload.get("topic_id") or "")
+        remote_ids: set[str] = set()
+        object_type = self._external_type(source_key)
+        if topic_id and object_type:
+            external = self.store.get_external("notion", object_type, f"topic:{topic_id}")
+            if external:
+                remote_ids.add(str(external["remote_id"]))
+        if source_key == "ongoing_projects" and topic_id:
+            local = self.store.query("SELECT notion_page_id FROM projects WHERE topic_id=?", (topic_id,))
+            if local and local[0].get("notion_page_id"):
+                remote_ids.add(str(local[0]["notion_page_id"]))
+        direct = [row for row in rows if str(row.get("id")) in remote_ids]
+        if direct:
+            return direct
+        props = self.props[source_key]
+        if topic_id and props.get("topic_id"):
+            matched = [row for row in rows
+                       if str(property_value(row, props["topic_id"]) or "").strip() == topic_id]
+            if matched:
+                return matched
+        proposal_url = str(payload.get("proposal_url") or "").strip().rstrip("/")
+        if proposal_url and props.get("proposal_url"):
+            matched = [row for row in rows if
+                       str(property_value(row, props["proposal_url"]) or "").strip().rstrip("/") == proposal_url]
+            if matched:
+                return matched
+        title = self._norm_title(str(payload.get("project_name") or ""))
+        if not title:
+            return []
+        return [row for row in rows
+                if self._norm_title(property_value(row, props["title"]) or "") == title]
+
+    def _backfill_identity(self, source_key: str, page: dict, payload: dict) -> dict:
+        updates = {}
+        for name, wanted in self._identity_values(source_key, payload).items():
+            actual = str(property_value(page, name) or "").strip()
+            if not actual:
+                updates[name] = prop_text(wanted)
+            elif name == self.props[source_key].get("topic_id") and actual != wanted:
+                raise NotionConflict(f"稳定身份冲突：{name} 现有值 {actual}，目标值 {wanted}")
+        return self.notion.update_page(page["id"], updates) if updates else page
+
+    def _merge_manual_new_project(self, payload: dict) -> dict:
+        """Read authoritative manual values before required-field validation."""
+        merged = self._normalize_payload_name(payload)
+        manual_project_fields: set[str] = set()
+        topic_id = str(merged.get("topic_id") or "")
+        if topic_id and not merged.get("proposal_url"):
+            local = self.store.query("SELECT source_url FROM projects WHERE topic_id=?", (topic_id,))
+            if local and local[0].get("source_url"):
+                merged["proposal_url"] = local[0]["source_url"]
+        project_rows = self._find_rows_by_identity("ongoing_projects", merged)
+        if len(project_rows) > 1:
+            raise NotionConflict("发现多个可能对应的进行中项目页，请先人工合并")
+        if project_rows:
+            row, p = project_rows[0], self.props["ongoing_projects"]
+            external = self.store.get_external("notion", "ongoing_project", f"topic:{topic_id}")
+            managed = bool(external and external.get("remote_id") == row["id"] and
+                           not str(external.get("checksum") or "").startswith("manual:"))
+            mapping = {"project_name": "title", "team": "team", "start_date": "start_date",
+                       "expected_completion": "expected_completion", "total_funding": "total_funding",
+                       "wallet": "wallet", "distributed": "distributed", "proposal_url": "proposal_url"}
+            for field, key in mapping.items():
+                if p.get(key):
+                    value = property_value(row, p[key])
+                    if value not in (None, "") and not managed:
+                        previous = merged.get(field)
+                        if previous not in (None, "") and not values_match(previous, value):
+                            merged.setdefault("_manual_mismatches", {})[p[key]] = value
+                        merged[field] = value
+                        manual_project_fields.add(field)
+        allocation_rows = self._find_rows_by_identity("fund_allocations", merged)
+        if len(allocation_rows) > 1:
+            raise NotionConflict("发现多个可能对应的资金分配记录，请先人工合并")
+        if allocation_rows:
+            row, p = allocation_rows[0], self.props["fund_allocations"]
+            external = self.store.get_external("notion", "fund_allocation", f"topic:{topic_id}")
+            managed = bool(external and external.get("remote_id") == row["id"] and
+                           not str(external.get("checksum") or "").startswith("manual:"))
+            amount, wallet = property_value(row, p["amount"]), property_value(row, p["wallet"])
+            if amount not in (None, "") and not managed:
+                merged["allocated_amount"] = amount
+            if wallet not in (None, "") and not managed:
+                if "wallet" in manual_project_fields and not values_match(merged.get("wallet"), wallet):
+                    raise NotionConflict("进行中项目页与资金分配表的钱包地址不一致，请先人工核对")
+                merged["wallet"] = wallet
+        return self._normalize_payload_name(merged)
+
+    @staticmethod
+    def _validate_payload(payload: dict, *, completion: bool = False) -> None:
+        topic_id = str(payload.get("topic_id") or "")
+        if not topic_id.isdigit():
+            raise WorkflowInputError("topic_id 必须是 Nervos Talk 数字主题 ID")
+        proposal_url = str(payload.get("proposal_url") or "")
+        if proposal_url and ("talk.nervos.org/t/" not in proposal_url or topic_id not in proposal_url):
+            raise WorkflowInputError("proposal_url 必须是与 topic_id 对应的 Nervos Talk 主题链接")
+        date_fields = ["start_date", "expected_completion"]
+        if completion:
+            date_fields.append("completion_date")
+        for field in date_fields:
+            try:
+                dt.date.fromisoformat(str(payload[field]))
+            except (KeyError, TypeError, ValueError):
+                raise WorkflowInputError(f"{field} 必须是有效的 YYYY-MM-DD 日期") from None
+        wallet = str(payload.get("wallet") or "").lower()
+        if not re.fullmatch(r"(?:ckb1|ckt1)[a-z0-9]+", wallet):
+            raise WorkflowInputError("wallet 必须是有效格式的 CKB 地址（ckb1... 或 ckt1...）")
+        if not completion and not re.fullmatch(r"\d+(?:\.\d+)?%", str(payload.get("distributed") or "")):
+            raise WorkflowInputError("distributed 必须是百分比，例如 20%")
+        amount_fields = ["total_funding", "funding_amount" if completion else "allocated_amount"]
+        for field in amount_fields:
+            value = str(payload.get(field) or "")
+            if not re.search(r"\d", value) or not re.search(r"(?:\$|\bCKB\b|\bUSD\b|\bCNY\b|¥|￥)",
+                                                              value, re.I):
+                raise WorkflowInputError(f"{field} 必须同时包含数值和币种")
+        for tx in payload.get("transactions", []):
+            require_fields(tx, ("hash", "date", "amount", "purpose"))
+            if not re.fullmatch(r"0x[0-9a-fA-F]+", str(tx["hash"])):
+                raise WorkflowInputError("交易哈希必须是 0x 开头的十六进制字符串")
+            try:
+                dt.date.fromisoformat(str(tx["date"]))
+            except ValueError:
+                raise WorkflowInputError("交易日期必须是有效的 YYYY-MM-DD 日期") from None
+
+    def _row_complete(self, source_key: str, row: dict, keys: tuple[str, ...]) -> bool:
+        props = self.props[source_key]
+        return all(props.get(key) and property_value(row, props[key]) not in (None, "") for key in keys)
+
     def reconcile_notion(self, actor: str = "system") -> dict:
-        """对账四个 Notion 表单与本地项目库：拉取各表现有行，按规范化标题匹配，
-        回填 projects.notion_page_id，并把目标表中已存在项目的待执行作业标记为
-        verified（解决「已录入 Notion 却仍显示待同步」的问题）。结果缓存到 meta
-        供 Dashboard 展示。"""
+        """Import manual rows, recover durable mappings, and verify each workflow step.
+
+        A title hit alone is never sufficient to settle a job.  Project and fund
+        steps are independently verified only after their required remote fields
+        (and expected transaction hashes) can be read back.
+        """
+        self.ensure_identity_schema()
         sources: dict[str, list[dict]] = {}
+        raw_sources: dict[str, list[dict]] = {}
         for name in ("fund_allocations", "transactions", "ongoing_projects", "completed_projects"):
             props = self.props[name]
+            raw_sources[name] = self.notion.query(self.ds[name])
             rows = []
-            for row in self.notion.query(self.ds[name]):
+            for row in raw_sources[name]:
+                fields = {key: property_value(row, prop_name) for key, prop_name in props.items()}
                 summary = {"id": row["id"], "title": property_value(row, props["title"]) or "",
-                           "url": row.get("url") or ""}
+                           "url": row.get("url") or "", "fields": fields}
                 if "status" in props:
                     summary["status"] = property_value(row, props["status"]) or ""
                 rows.append(summary)
             sources[name] = rows
 
-        ongoing_by_title: dict[str, list[dict]] = {}
-        for row in sources["ongoing_projects"]:
-            ongoing_by_title.setdefault(self._norm_title(row["title"]), []).append(row)
-        completed_by_title: dict[str, list[dict]] = {}
-        for row in sources["completed_projects"]:
-            completed_by_title.setdefault(self._norm_title(row["title"]), []).append(row)
-
         matched: list[str] = []
         verified_jobs: list[str] = []
+        conflicts: list[dict] = []
+        transaction_titles = {str(property_value(row, self.props["transactions"]["title"]) or "")
+                              for row in raw_sources["transactions"]}
         for project in self.store.query("SELECT * FROM projects"):
             topic_id = str(project["topic_id"])
-            norm = self._norm_title(project["title"])
-            ongoing = ongoing_by_title.get(norm) or []
-            if len(ongoing) == 1 and project.get("notion_page_id") != ongoing[0]["id"]:
-                self.store.set_project_notion(topic_id, ongoing[0]["id"])
-                matched.append(topic_id)
-            has_ongoing = bool(ongoing)
-            has_completed = bool(completed_by_title.get(norm))
-            jobs = self.store.query(
-                """SELECT * FROM sync_jobs WHERE topic_id=?
-                   AND status IN ('queued','ready','needs_input','partial')""", (topic_id,))
+            jobs = self.store.query("SELECT * FROM sync_jobs WHERE topic_id=? ORDER BY updated_at DESC",
+                                    (topic_id,))
+            payload = {"topic_id": topic_id, "project_name": project["title"],
+                       "proposal_url": project.get("source_url") or ""}
             for job in jobs:
+                if job.get("payload_json"):
+                    try:
+                        payload = {**payload, **json.loads(job["payload_json"])}
+                        break
+                    except (TypeError, ValueError):
+                        pass
+            ongoing = self._find_rows_by_identity(
+                "ongoing_projects", payload, raw_sources["ongoing_projects"])
+            completed = self._find_rows_by_identity(
+                "completed_projects", payload, raw_sources["completed_projects"])
+            allocations = self._find_rows_by_identity(
+                "fund_allocations", payload, raw_sources["fund_allocations"])
+            for source_key, rows in (("ongoing_projects", ongoing),
+                                     ("completed_projects", completed),
+                                     ("fund_allocations", allocations)):
+                if len(rows) > 1:
+                    conflicts.append({"topic_id": topic_id, "source": source_key,
+                                      "page_ids": [row["id"] for row in rows]})
+            if len(ongoing) == 1:
+                ongoing[0] = self._backfill_identity("ongoing_projects", ongoing[0], payload)
+                if project.get("notion_page_id") != ongoing[0]["id"]:
+                    self.store.set_project_notion(topic_id, ongoing[0]["id"])
+                known = self.store.get_external("notion", "ongoing_project", f"topic:{topic_id}")
+                marker = None if known and known.get("remote_id") == ongoing[0]["id"] else "manual:reconciled"
+                self.store.record_external("notion", "ongoing_project", f"topic:{topic_id}",
+                                           ongoing[0]["id"], marker)
+                matched.append(topic_id)
+            if len(completed) == 1:
+                completed[0] = self._backfill_identity("completed_projects", completed[0], payload)
+                known = self.store.get_external("notion", "completed_project", f"topic:{topic_id}")
+                marker = None if known and known.get("remote_id") == completed[0]["id"] else "manual:reconciled"
+                self.store.record_external("notion", "completed_project", f"topic:{topic_id}",
+                                           completed[0]["id"], marker)
+            if len(allocations) == 1:
+                allocations[0] = self._backfill_identity("fund_allocations", allocations[0], payload)
+                known = self.store.get_external("notion", "fund_allocation", f"topic:{topic_id}")
+                marker = None if known and known.get("remote_id") == allocations[0]["id"] else "manual:reconciled"
+                self.store.record_external("notion", "fund_allocation", f"topic:{topic_id}",
+                                           allocations[0]["id"], marker)
+            for job in jobs:
+                if job["status"] not in ("queued", "ready", "needs_input", "partial"):
+                    continue
                 wf = "in_progress" if job["workflow"] == "in-progress" else job["workflow"]
-                covered = (wf == "in_progress" and has_ongoing) or \
-                          (wf in ("completion", "closure") and has_completed)
-                if covered:
-                    self.store.set_job_status(job["idempotency_key"], "verified",
-                                              "对账：Notion 表单中已存在该项目")
+                before = job["status"]
+                if wf == "in_progress":
+                    if len(ongoing) == 1 and self._row_complete(
+                            "ongoing_projects", ongoing[0],
+                            ("title", "team", "start_date", "expected_completion", "total_funding",
+                             "wallet", "distributed", "status")):
+                        self.store.set_step(job["idempotency_key"], "project_list", "verified",
+                                            [ongoing[0]["id"]], value_checksum=checksum(payload))
+                    txs = []
+                    if job.get("payload_json"):
+                        try:
+                            txs = json.loads(job["payload_json"]).get("transactions") or []
+                        except (TypeError, ValueError):
+                            pass
+                    hashes_present = all(str(tx.get("hash") or "") in transaction_titles for tx in txs)
+                    if (len(allocations) == 1 and hashes_present and self._row_complete(
+                            "fund_allocations", allocations[0], ("title", "amount", "status", "wallet"))):
+                        ids = [allocations[0]["id"]] + [str(tx.get("hash")) for tx in txs]
+                        self.store.set_step(job["idempotency_key"], "fund_pool", "verified", ids,
+                                            value_checksum=checksum(payload))
+                elif wf in ("completion", "closure") and len(completed) == 1 and self._row_complete(
+                        "completed_projects", completed[0],
+                        ("title", "team", "start_date", "completion_date", "funding_amount",
+                         "wallet", "total_funding", "status", "expected_completion")):
+                    self.store.set_step(job["idempotency_key"], "completion", "verified",
+                                        [completed[0]["id"]], value_checksum=checksum(payload))
+                now = self.store.query("SELECT status FROM sync_jobs WHERE idempotency_key=?",
+                                       (job["idempotency_key"],))
+                if before != "verified" and now and now[0]["status"] == "verified":
                     verified_jobs.append(job["idempotency_key"])
         if matched or verified_jobs:
             self.store.audit(actor, "notion_reconciled", "",
-                             {"matched_projects": matched, "verified_jobs": verified_jobs})
+                             {"matched_projects": sorted(set(matched)), "verified_jobs": verified_jobs,
+                              "conflicts": conflicts})
         overview = {"updated_at": utcnow(),
                     "sources": {name: {"count": len(rows), "rows": rows}
                                 for name, rows in sources.items()},
-                    "matched_projects": matched, "verified_jobs": verified_jobs}
+                    "matched_projects": sorted(set(matched)), "verified_jobs": verified_jobs,
+                    "conflicts": conflicts}
         self.store.set_meta("notion_overview", json.dumps(overview, ensure_ascii=False))
         return overview
 
     def read_ongoing_base(self, topic_id: str) -> dict:
         """Recover migration fields from the authoritative ongoing Notion row."""
+        self.ensure_identity_schema()
         projects = self.store.query("SELECT * FROM projects WHERE topic_id=?", (str(topic_id),))
-        if not projects or not projects[0].get("notion_page_id"):
+        if not projects:
             return {}
-        page = self.notion.retrieve_page(projects[0]["notion_page_id"])
+        payload = {"topic_id": str(topic_id), "project_name": projects[0]["title"],
+                   "proposal_url": projects[0].get("source_url") or ""}
+        matches = self._find_rows_by_identity("ongoing_projects", payload)
+        if len(matches) > 1:
+            raise NotionConflict("进行中项目表存在多个候选页面，无法安全回读")
+        if matches:
+            page = self._backfill_identity("ongoing_projects", matches[0], payload)
+            self.store.set_project_notion(str(topic_id), page["id"])
+            known = self.store.get_external("notion", "ongoing_project", f"topic:{topic_id}")
+            marker = None if known and known.get("remote_id") == page["id"] else "manual:recovered"
+            self.store.record_external("notion", "ongoing_project", f"topic:{topic_id}", page["id"], marker)
+        elif projects[0].get("notion_page_id"):
+            page = self.notion.retrieve_page(projects[0]["notion_page_id"])
+        else:
+            return {}
         op = self.props["ongoing_projects"]
         return {
             "topic_id": str(topic_id),
@@ -193,12 +447,57 @@ class NotionAutomation:
             "total_funding": property_value(page, op["total_funding"]),
             "funding_amount": property_value(page, op["total_funding"]),
             "wallet": property_value(page, op["wallet"]),
+            "proposal_url": property_value(page, op["proposal_url"]) if op.get("proposal_url") else "",
         }
 
+    def _merge_completion_payload(self, payload: dict) -> dict:
+        merged = self._normalize_payload_name(payload)
+        topic_id = str(merged.get("topic_id") or "")
+        if topic_id:
+            base = self.read_ongoing_base(topic_id)
+            # Manual Notion values are authoritative; completion-only fields remain in payload.
+            for key, value in base.items():
+                if value not in (None, ""):
+                    merged[key] = value
+        completed = self._find_rows_by_identity("completed_projects", merged)
+        if len(completed) > 1:
+            raise NotionConflict("已完成项目表存在多个候选页面，请先人工合并")
+        if completed:
+            row, p = completed[0], self.props["completed_projects"]
+            external = self.store.get_external("notion", "completed_project", f"topic:{topic_id}")
+            managed = bool(external and external.get("remote_id") == row["id"] and
+                           not str(external.get("checksum") or "").startswith("manual:"))
+            mapping = {"project_name": "title", "team": "team", "start_date": "start_date",
+                       "completion_date": "completion_date", "funding_amount": "funding_amount",
+                       "wallet": "wallet", "total_funding": "total_funding",
+                       "expected_completion": "expected_completion", "status": "status",
+                       "proposal_url": "proposal_url"}
+            for field, key in mapping.items():
+                if p.get(key):
+                    value = property_value(row, p[key])
+                    if value not in (None, "") and not managed:
+                        previous = merged.get(field)
+                        if previous not in (None, "") and not values_match(previous, value):
+                            merged.setdefault("_manual_mismatches", {})[p[key]] = value
+                        merged[field] = value
+            deliverables = [property_value(row, p[key]) for key in ("deliverables", "deliverables_2")
+                            if p.get(key) and property_value(row, p[key]) not in (None, "")]
+            if deliverables and not managed:
+                merged["deliverables"] = deliverables
+        return self._normalize_payload_name(merged)
+
     def execute_new_project(self, payload: dict, actor: str = "system") -> dict:
-        payload = self._normalize_payload_name(payload)
+        self.ensure_identity_schema()
+        payload = self._merge_manual_new_project(payload)
+        prefetched_mismatches = payload.pop("_manual_mismatches", {})
         require_fields(payload, REQUIRED_NEW_PROJECT)
+        self._validate_payload(payload)
         topic_id = str(payload["topic_id"])
+        tp = self.props["transactions"]
+        for tx in payload.get("transactions", []):
+            if tx.get("hash") and len(self.notion.find_title(
+                    self.ds["transactions"], tp["title"], tx["hash"])) > 1:
+                raise NotionConflict(f"交易表存在重复哈希 {tx['hash']}，请人工确认后合并")
         key = self.store.queue_job(topic_id, "in_progress", payload)
         remote_ids: list[str] = []
         try:
@@ -206,20 +505,40 @@ class NotionAutomation:
             expected = {
                 p["title"]: payload["project_name"], p["amount"]: payload["allocated_amount"],
                 p["status"]: self.select["ongoing"], p["wallet"]: payload["wallet"],
+                **self._identity_values("fund_allocations", payload),
             }
-            allocation, _ = self._existing_or_create(
-                data_source=self.ds["fund_allocations"], title_property=p["title"],
-                title=payload["project_name"], expected=expected,
-                properties={p["title"]: prop_title(payload["project_name"]),
-                            p["amount"]: prop_text(payload["allocated_amount"]),
-                            p["status"]: prop_select(self.select["ongoing"]),
-                            p["wallet"]: prop_text(payload["wallet"])})
+            allocation_props = {p["title"]: prop_title(payload["project_name"]),
+                                p["amount"]: prop_text(payload["allocated_amount"]),
+                                p["status"]: prop_select(self.select["ongoing"]),
+                                p["wallet"]: prop_text(payload["wallet"]),
+                                **{name: prop_text(value) for name, value in
+                                   self._identity_values("fund_allocations", payload).items()}}
+            allocation_rows = self._find_rows_by_identity("fund_allocations", payload)
+            allocation_external = self.store.get_external(
+                "notion", "fund_allocation", f"topic:{topic_id}")
+            allocation_managed = bool(allocation_rows and allocation_external and
+                                      allocation_external.get("remote_id") == allocation_rows[0]["id"] and
+                                      not str(allocation_external.get("checksum") or "").startswith("manual:"))
+            allocation_adopted = bool(allocation_rows and not allocation_managed)
+            if len(allocation_rows) > 1:
+                raise NotionConflict("发现多个可能对应的资金分配记录，请先人工合并")
+            if allocation_rows:
+                allocation = self._backfill_identity("fund_allocations", allocation_rows[0], payload)
+                blank_updates = {name: prop for name, prop in allocation_props.items()
+                                 if property_value(allocation, name) in (None, "")}
+                if blank_updates:
+                    allocation = self.notion.update_page(allocation["id"], blank_updates)
+                assert_properties(allocation, {name: value for name, value in expected.items()
+                                               if not allocation_adopted or name != p["title"]})
+            else:
+                allocation = self.notion.create_page(self.ds["fund_allocations"], allocation_props)
+                allocation = self.notion.retrieve_page(allocation["id"])
+                assert_properties(allocation, expected)
             remote_ids.append(allocation["id"])
             self.store.record_external("notion", "fund_allocation", f"topic:{topic_id}",
-                                       allocation["id"], checksum(expected))
+                                       allocation["id"], ("manual:" if allocation_adopted else "") + checksum(expected))
 
             tp = self.props["transactions"]
-            archived_dups: list[str] = []
             for tx in payload.get("transactions", []):
                 require_fields(tx, ("hash", "date", "amount", "purpose"))
                 tx_type = self._transaction_type(tx, payload)
@@ -229,12 +548,7 @@ class NotionAutomation:
                 }
                 rows = self.notion.find_title(self.ds["transactions"], tp["title"], tx["hash"])
                 if len(rows) > 1:
-                    # 历史原因产生重复交易行：保留第一行，归档其余
-                    row = rows[0]
-                    for extra in rows[1:]:
-                        self.notion.archive_page(extra["id"])
-                        archived_dups.append(extra["id"])
-                    assert_properties(row, expected_tx)
+                    raise NotionConflict(f"交易表存在重复哈希 {tx['hash']}，请人工确认后合并")
                 elif rows:
                     row = rows[0]
                     assert_properties(row, expected_tx)
@@ -249,8 +563,6 @@ class NotionAutomation:
                                     tp["purpose"]: prop_text(tx["purpose"])})
                 remote_ids.append(row["id"])
                 self.store.record_external("notion", "transaction", tx["hash"], row["id"], checksum(expected_tx))
-            if archived_dups:
-                self.store.audit(actor, "notion_transactions_deduped", key, {"archived": archived_dups})
             self.store.set_step(key, "fund_pool", "verified", remote_ids, value_checksum=checksum(payload))
         except NotionConflict as exc:
             self.store.set_step(key, "fund_pool", "conflict", remote_ids, str(exc))
@@ -269,24 +581,32 @@ class NotionAutomation:
                 op["expected_completion"]: payload["expected_completion"],
                 op["total_funding"]: payload["total_funding"], op["wallet"]: payload["wallet"],
                 op["distributed"]: payload["distributed"], op["status"]: self.select["ongoing"],
+                **self._identity_values("ongoing_projects", payload),
             }
-            field_mismatches: dict = {}
+            field_mismatches: dict = dict(prefetched_mismatches)
             adopted = False
-            exact = self.notion.find_title(self.ds["ongoing_projects"], op["title"], payload["project_name"])
-            if not exact:
-                matches = self._find_existing_project_page(payload["project_name"])
-                if len(matches) == 1:
-                    # 复用手动维护的项目页，避免重复建页（如 NNCBN）
-                    page, field_mismatches = self._adopt_project_page(matches[0], payload)
-                    created = False
-                    adopted = True
-                elif len(matches) > 1:
-                    raise NotionConflict("发现多个可能同名的项目页，请先人工合并："
-                                         + ", ".join(str(m.get("url", "")) for m in matches))
+            matches = self._find_rows_by_identity("ongoing_projects", payload)
+            if len(matches) > 1:
+                raise NotionConflict("发现多个可能同名的项目页，请先人工合并："
+                                     + ", ".join(str(m.get("url", "")) for m in matches))
+            if matches:
+                page = self._backfill_identity("ongoing_projects", matches[0], payload)
+                ours = self.store.get_external("notion", "ongoing_project", f"topic:{topic_id}")
+                managed = bool(ours and ours.get("remote_id") == page["id"] and
+                               not str(ours.get("checksum") or "").startswith("manual:"))
+                if managed:
+                    assert_properties(page, expected_project)
                 else:
-                    matches = None
-            if exact or matches is None:
-                tpl = None if exact else self._template_children(payload)
+                    page, adopted_mismatches = self._adopt_project_page(page, payload)
+                    field_mismatches.update(adopted_mismatches)
+                    # A manually titled page may retain its display prefix. Stable
+                    # identity, not display text, now proves it is the same project.
+                    assert_properties(page, {name: value for name, value in expected_project.items()
+                                             if name != op["title"]})
+                    adopted = True
+                created = False
+            else:
+                tpl = self._template_children(payload)
                 if tpl:
                     head, middle, tail = self._split_segments(tpl)
                 else:
@@ -302,6 +622,8 @@ class NotionAutomation:
                         op["wallet"]: prop_text(payload["wallet"]),
                         op["distributed"]: prop_text(payload["distributed"]),
                         op["status"]: prop_select(self.select["ongoing"]),
+                        **{name: prop_text(value) for name, value in
+                           self._identity_values("ongoing_projects", payload).items()},
                     }, children=head, icon="🛡️")
             if created:
                 # Notion API 不接受通过 children 创建 child_database 块，内联数据库必须
@@ -324,7 +646,7 @@ class NotionAutomation:
             project_ids.append(page["id"])
             self.store.set_project_notion(topic_id, page["id"])
             self.store.record_external("notion", "ongoing_project", f"topic:{topic_id}",
-                                       page["id"], checksum(expected_project))
+                                       page["id"], ("manual:" if adopted else "") + checksum(expected_project))
             self.store.set_step(key, "project_list", "verified", project_ids, value_checksum=checksum(payload))
         except NotionConflict as exc:
             # Even when legacy data conflicts with an existing row, retain the unique
@@ -812,9 +1134,12 @@ class NotionAutomation:
             raise
 
     def execute_completion(self, payload: dict, actor: str = "system") -> dict:
-        payload = self._normalize_payload_name(payload)
+        self.ensure_identity_schema()
+        payload = self._merge_completion_payload(payload)
+        prefetched_mismatches = payload.pop("_manual_mismatches", {})
         require_fields(payload, ("topic_id", "project_name", "team", "start_date", "completion_date",
                                  "funding_amount", "wallet", "total_funding", "expected_completion", "status"))
+        self._validate_payload(payload, completion=True)
         topic_id = str(payload["topic_id"])
         workflow = "closure" if payload["status"] == self.select["shutdown"] else "completion"
         key = self.store.queue_job(topic_id, workflow, payload)
@@ -831,6 +1156,7 @@ class NotionAutomation:
             cp["deliverables_2"]: (payload.get("deliverables") or ["", ""])[1] if len(payload.get("deliverables") or []) > 1 else "",
             cp["total_funding"]: payload["total_funding"], cp["status"]: payload["status"],
             cp["expected_completion"]: payload["expected_completion"],
+            **self._identity_values("completed_projects", payload),
         }
         properties = {
             cp["title"]: prop_title(payload["project_name"]), cp["team"]: prop_text(payload["team"]),
@@ -842,23 +1168,28 @@ class NotionAutomation:
             cp["total_funding"]: prop_text(payload["total_funding"]),
             cp["status"]: prop_select(payload["status"]),
             cp["expected_completion"]: prop_date(payload["expected_completion"]),
+            **{name: prop_text(value) for name, value in
+               self._identity_values("completed_projects", payload).items()},
         }
         try:
-            matches = self._find_pages_by_norm_title("completed_projects", payload["project_name"])
+            matches = self._find_rows_by_identity("completed_projects", payload)
             if len(matches) > 1:
                 raise NotionConflict("已完成项目表中存在多个同名项目，请先人工合并："
                                      + ", ".join(str(m.get("url", "")) for m in matches))
             ours = self.store.get_external("notion", "completed_project", f"topic:{topic_id}")
             adopted = False
-            field_mismatches: dict = {}
+            field_mismatches: dict = dict(prefetched_mismatches)
             if matches:
-                completed = matches[0]
-                if ours and ours.get("remote_id") == completed["id"]:
+                completed = self._backfill_identity("completed_projects", matches[0], payload)
+                managed = bool(ours and ours.get("remote_id") == completed["id"] and
+                               not str(ours.get("checksum") or "").startswith("manual:"))
+                if managed:
                     # 本工作流自己建/管的页：保持原有严格校验（属性不一致即冲突，需人工核对）
                     assert_properties(completed, expected)
                 else:
                     # 手动维护的页：只补空字段，已有值绝不覆盖；差异只记录不阻断
-                    completed, field_mismatches = self._adopt_completed_page(completed, payload)
+                    completed, adopted_mismatches = self._adopt_completed_page(completed, payload)
+                    field_mismatches.update(adopted_mismatches)
                     adopted = True
             else:
                 completed = self.notion.create_page(self.ds["completed_projects"], properties, None, "✅")
@@ -891,14 +1222,13 @@ class NotionAutomation:
             if ongoing_id:
                 self.notion.update_page(ongoing_id, {op["status"]: prop_select(ongoing_status)})
             fp = self.props["fund_allocations"]
-            allocations = self.notion.find_title(self.ds["fund_allocations"], fp["title"], payload["project_name"])
+            allocations = self._find_rows_by_identity("fund_allocations", payload)
+            if len(allocations) > 1:
+                raise NotionConflict("资金分配表存在多个候选记录，请先人工合并")
             for allocation in allocations:
                 self.notion.update_page(allocation["id"], {fp["status"]: prop_select(self.select["completed"])})
-            # 只给「本工作流自建」的页登记外部记录：复用的手动页保持匿名，
-            # 下次执行仍走 adopt 路径（幂等：空字段已补齐、评价小节已存在，均不重复操作）
-            if not adopted:
-                self.store.record_external("notion", "completed_project", f"topic:{topic_id}",
-                                           completed["id"], checksum(expected))
+            self.store.record_external("notion", "completed_project", f"topic:{topic_id}",
+                                       completed["id"], ("manual:" if adopted else "") + checksum(expected))
             self.store.set_step(key, "completion", "verified", [completed["id"]], value_checksum=checksum(payload))
             with self.store.transaction() as conn:
                 conn.execute("UPDATE projects SET lifecycle=?,updated_at=? WHERE topic_id=?",
