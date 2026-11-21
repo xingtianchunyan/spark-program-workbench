@@ -392,5 +392,81 @@ class ScanCacheTests(unittest.TestCase):
         self.assertEqual([r["tx_hash"] for r in second[0]["rows"]], ["0xM9"])
 
 
+class ChainWithoutNotionTokenTests(unittest.TestCase):
+    """未配置 Notion Token 时链上检索仍可用（notion=None 不阻断扫描）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = load_workspace_config()
+        self.cache_path = Path(self.tmp.name) / "cache.json"
+        # 测试不依赖真实 project_wallets.json：默认指向不存在的文件（清单为空）
+        self.addCleanup(setattr, chain, "LOCAL_WALLETS_PATH", chain.LOCAL_WALLETS_PATH)
+        chain.LOCAL_WALLETS_PATH = Path(self.tmp.name) / "no_such_wallets.json"
+
+    @staticmethod
+    def records():
+        return [
+            {"tx_hash": "0xaaa", "direction": "out", "amount_ckb": 1234567,
+             "counterparty_address": OTHER_ADDRESS, "counterparty_lock": OTHER_LOCK,
+             "date": "2026-01-02T20:30:00+00:00", "is_change": True},
+            {"tx_hash": "0xbbb", "direction": "in", "amount_ckb": 500,
+             "counterparty_address": SENDER_ADDRESS, "counterparty_lock": SENDER_LOCK,
+             "date": "2026-01-05T02:00:00+00:00", "is_change": False},
+        ]
+
+    def test_read_helpers_return_empty_when_no_notion(self):
+        self.assertEqual(chain.read_transactions_rows(None, self.config), {})
+        self.assertEqual(chain.read_project_wallets(None, self.config), {})
+
+    def test_scan_main_without_notion_reports_all_missing(self):
+        result = chain.scan_main(None, self.config, records=self.records())
+        self.assertEqual(sorted(r["tx_hash"] for r in result["missing"]), ["0xaaa", "0xbbb"])
+        self.assertEqual(result["mismatched"], [])
+        self.assertEqual(result["extra"], [])
+        self.assertEqual(result["known_multisig"], {})
+        self.assertEqual(result["scanned"], 2)
+
+    def test_scan_main_without_notion_full_result_fields(self):
+        result = chain.scan_main(None, self.config, records=self.records())
+        row = result["missing"][0]
+        # 无 token 时用途列没有项目名归一化，但格式（数额+币种）仍正确
+        self.assertTrue(row["amount"].endswith("CKB"))
+        self.assertIn(row["type"],
+                      (self.config["select_values"]["withdrawal"],
+                       self.config["select_values"]["deposit"]))
+
+    def test_scan_multisig_without_notion_returns_empty_and_keeps_cache(self):
+        # 预置一份缓存，确认无 token 扫描不会用空结果覆盖它
+        chain.save_scan_cache({"multisig": {"updated_at": "keep", "items": [{"multisig": "x"}]}},
+                              self.cache_path)
+
+        class _NoRpc:
+            def rpc(self, *_a, **_k):
+                raise AssertionError("无 token 时不应发起任何链上请求")
+
+        self.assertEqual(chain.scan_multisig(None, self.config, _NoRpc(),
+                                             cache_path=self.cache_path), [])
+        self.assertEqual(chain.cached_multisig(cache_path=self.cache_path)["updated_at"], "keep")
+
+    def test_local_project_wallets_parsing(self):
+        wallets = Path(self.tmp.name) / "wallets.json"
+        wallets.write_text(json.dumps({
+            "_说明": "被忽略", "ckb1aaa": "项目甲", "ckb1bbb": "",
+            "ckb1ccc": "  ", "not-a-key": 1 if False else "x",
+        }), encoding="utf-8")
+        got = chain.local_project_wallets(path=wallets)
+        self.assertEqual(got, {"ckb1aaa": "项目甲", "not-a-key": "x"})
+        self.assertEqual(chain.local_project_wallets(path=Path(self.tmp.name) / "none.json"), {})
+
+    def test_multisig_pages_fall_back_to_local_wallets(self):
+        wallets = Path(self.tmp.name) / "wallets.json"
+        wallets.write_text(json.dumps({"ckb1aaa": "项目甲"}), encoding="utf-8")
+        chain.LOCAL_WALLETS_PATH = wallets
+        pages = chain._multisig_pages(None, self.config)
+        self.assertEqual(pages, {"ckb1aaa": {"project": "项目甲",
+                                             "page_id": None, "source": None}})
+
+
 if __name__ == "__main__":
     unittest.main()

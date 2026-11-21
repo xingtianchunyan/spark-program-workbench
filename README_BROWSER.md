@@ -1,5 +1,7 @@
 # Spark Program Workbench（本地浏览器版）
 
+审阅队列默认打开「仅草稿」。可直接编辑正文并点「保存修改」（Ctrl / ⌘ + S），也可选中文字后点「添加批注」；同事可从侧栏查看批注和定位原文。添加批注或标记已阅前会先保存当前修改。若其他成员已更新正文，旧版本不会覆盖新版本。正文和批注仅保存在工作台，不会发到 Talk。
+
 ## 现在已经实现的功能
 
 - 浏览器任务页，默认只监听 `127.0.0.1`，不会暴露到局域网。
@@ -12,7 +14,7 @@
 - 只有创建后重新读取且字段一致，才会勾选“更新项目列表”和“更新资金池状态”。
 - Dashboard 与联系人任务继续创建和保留；因尚无业务规则，不会假装完成。
 - 团队模式提供工作台账号、角色、会话、CSRF 防护和审计记录。
-- Nervos Talk 正式发帖只支持成员自己的 Discourse User API Key，不保存论坛密码。
+- 四位委员会成员使用自己的 Nervos Talk 用户名和密码登录后即可审阅草稿；审阅和发布都不需要个人 API Key。正式发布需要有权限的成员再次明确确认并单次输入本人 Talk 密码。
 - 浏览器版同时提供原工作台的任务、项目看板、时间线、项目跟踪、回复模板、AI 起草、常用链接、知识库、会议纪要和上会项目模块。
 - 时间线的“项目跟踪”页以 Nervos Talk Topic ID 为稳定主键，合并导入项目字段与帖子阶段；每条委员会 Pending 回复都单独保留楼层与日期。默认显示 In-Progress，所有分类按最初发帖日期倒序。
 - Notion 导出的 ZIP（包含子页面文件夹和 CSV）可直接拖入“项目跟踪”页，或点击“拖入 Notion ZIP 导出”选择文件；最多 50 MB。帖子时间线另有独立的“刷新帖子时间线”按钮，仅抓取论坛并更新本地缓存，不执行 Notion 同步。
@@ -71,21 +73,26 @@ py -3 -m spark_web.server --auto-shutdown
 SPARK_TEAM_MODE=0
 ```
 
-团队部署前，必须放在带 HTTPS 和组织身份认证的私有服务后面。不要把本服务直接绑定到 `0.0.0.0`。
+团队部署前，在同一主机使用私有 HTTPS 反向代理（工作台监听本机 `127.0.0.1`）。代理需保留浏览器的 Origin 并覆盖设置 `X-Forwarded-Proto: https`。将浏览器访问的网址（仅协议、域名和可选端口）填入 `SPARK_TEAM_HTTPS_ORIGIN`。不要把服务直接暴露在局域网 HTTP 或公网。
 
-创建工作台用户：
-
-```powershell
-python -m spark_web.manage_users alice --role operator --forum-username alice_on_forum
-```
-
-如果该成员需要以自己的身份正式发帖，将其个人 Discourse User API Key 写入 `.env`：
+团队模式只接受这四个 Talk 账号：`xingtianchunyan`、`zz_tovarishch`、`Hanssen`、`yixiu.ckbfans.bit`。用户名不区分大小写，可带一个 `@`。先核对委员会名单，再由 Talk 校验密码；首次成功登录默认取得审阅权限。无需手动填写白名单（旧 `SPARK_TEAM_ALLOWED_TALK_USERS` 已不生效）。
 
 ```dotenv
-SPARK_DISCOURSE_USER_API_KEY_ALICE_ON_FORUM=
+SPARK_TEAM_MODE=1
+SPARK_TEAM_HTTPS_ORIGIN=https://review.example.org
 ```
 
-草稿可以由团队协作准备，但正式发帖请求必须由绑定该论坛身份的工作台用户本人确认“正式发布”。
+已明确绑定四个 Talk 账号之一的工作台用户保留原角色；其他账号不能通过旧的本地密码或旧会话进入。若论坛要求双因素验证，当前直登方式不支持，不应关闭论坛安全设置。
+
+如需为委员会成员配置额外角色，管理员可显式绑定对应的 Talk 用户名：
+
+```powershell
+python -m spark_web.manage_users xingtianchunyan --role administrator --forum-username xingtianchunyan
+```
+
+上述命令仍会要求输入一个本地密码以维护数据库兼容性；请使用独立随机密码，不要输入 Talk 密码。浏览器团队登录只验证 Talk 密码。新版不使用旧明文密码；如旧 `spark_task_data.json` 存有 `nervos_password`，可停服后删除该字段并保留其余数据。
+
+草稿审阅不会发帖。正式发布由绑定论坛身份且有发帖角色的成员单独确认，输入的论坛密码只用于该次请求。如果论坛要求双因素验证，可从确认窗口打开原帖，在 Talk 网页手动发布。
 
 ## 运行测试
 

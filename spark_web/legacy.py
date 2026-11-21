@@ -49,7 +49,68 @@ def save_data(data: dict) -> None:
     for field in _SECRET_FIELDS:
         clean.pop(field, None)
     with _LOCK:
+        try:
+            raw = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}
+        # 密文字段不回填进对外数据，但必须从磁盘原样保留，
+        # 否则任何一次 load→save 往返都会把 Talk 绑定 / AI Key 永久抹掉
+        for field in _SECRET_FIELDS:
+            if field in raw:
+                clean[field] = raw[field]
         _atomic_json(DATA_PATH, clean)
+
+
+def forum_binding() -> str | None:
+    """Read nervos_username from the raw data file without stripping secret fields."""
+    with _LOCK:
+        try:
+            data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+    value = data.get("nervos_username")
+    return str(value).strip() if value else None
+
+
+def set_forum_binding(username: str) -> str:
+    """Set nervos_username in the raw data file, preserving every other field (incl. secrets)."""
+    username = str(username or "").strip()
+    if not username:
+        raise ValueError("Nervos Talk 用户名不能为空")
+    with _LOCK:
+        try:
+            data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        data["nervos_username"] = username
+        _atomic_json(DATA_PATH, data)
+    return username
+
+
+def forum_password() -> str | None:
+    """Read nervos_password from the raw data file without stripping secret fields."""
+    with _LOCK:
+        try:
+            data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+    value = data.get("nervos_password")
+    return str(value) if value else None
+
+
+def set_forum_password(password: str) -> None:
+    """Set nervos_password in the raw data file, preserving every other field."""
+    password = str(password or "")
+    with _LOCK:
+        try:
+            data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if password:
+            data["nervos_password"] = password
+        else:
+            data.pop("nervos_password", None)
+        _atomic_json(DATA_PATH, data)
 
 
 def replace_section(name: str, value: Any) -> dict:

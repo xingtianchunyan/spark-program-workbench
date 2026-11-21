@@ -62,7 +62,52 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TEXT NOT NULL, created_at TEXT NOT NULL,
   FOREIGN KEY(username) REFERENCES users(username)
 );
+CREATE TABLE IF NOT EXISTS review_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  topic_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  source_url TEXT NOT NULL DEFAULT '',
+  template TEXT NOT NULL DEFAULT '',
+  draft_content TEXT NOT NULL,
+  analysis TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  reviewed_at TEXT, reviewed_by TEXT
+);
+CREATE TABLE IF NOT EXISTS review_draft_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  draft_id INTEGER NOT NULL REFERENCES review_drafts(id),
+  start_offset INTEGER, end_offset INTEGER,
+  quote TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS review_draft_comments_draft ON review_draft_comments(draft_id);
 """
+
+
+class ReviewConflict(Exception):
+    pass
+
+
+def review_text(content: str) -> str:
+    return content.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _review_revision(row) -> str:
+    return checksum([review_text(row["draft_content"]), row["created_at"], row["edited_at"]])
+
+
+def _review_anchor(before: str, after: str, start: int, end: int, prefix: int, suffix: int):
+    if end <= prefix:
+        return start, end
+    if start >= len(before) - suffix:
+        shift = len(after) - len(before)
+        return start + shift, end + shift
+    # A moved quote can be reattached only when its location is unambiguous in both versions.
+    quote = before[start:end]
+    index = after.find(quote)
+    if quote and index >= 0 and before.find(quote) == before.rfind(quote) and index == after.rfind(quote):
+        return index, index + len(quote)
+    return None, None
 
 
 def utcnow() -> str:
@@ -90,6 +135,10 @@ class Store:
         conn = self._connect()
         try:
             conn.executescript(SCHEMA)
+            conn.execute("BEGIN IMMEDIATE")
+            if "edited_at" not in {row["name"] for row in conn.execute("PRAGMA table_info(review_drafts)")}:
+                conn.execute("ALTER TABLE review_drafts ADD COLUMN edited_at TEXT")
+            conn.commit()
         finally:
             conn.close()
         self.import_legacy_once()
@@ -158,6 +207,119 @@ class Store:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
         finally:
             conn.close()
+
+    def save_review_draft(self, topic_id: str, title: str, source_url: str, template: str,
+                          content: str, analysis: str = "") -> int:
+        """Regeneration may replace untouched drafts, never a committee edit or annotation."""
+        content = review_text(content)
+        with self.transaction() as conn:
+            existing = conn.execute("""SELECT d.id FROM review_drafts d
+                WHERE d.topic_id=? AND d.template=? AND d.status='pending' AND d.edited_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM review_draft_comments c WHERE c.draft_id=d.id)
+                ORDER BY d.id DESC LIMIT 1""", (topic_id, template)).fetchone()
+            if existing:
+                conn.execute("""UPDATE review_drafts SET title=?, source_url=?, draft_content=?,
+                             analysis=?, created_at=? WHERE id=?""",
+                             (title, source_url, content, analysis, utcnow(), existing["id"]))
+                return int(existing["id"])
+            cursor = conn.execute("""INSERT INTO review_drafts
+                (topic_id, title, source_url, template, draft_content, analysis, status, created_at)
+                VALUES (?,?,?,?,?,?,'pending',?)""",
+                (topic_id, title, source_url, template, content, analysis, utcnow()))
+            return int(cursor.lastrowid)
+
+    def review_drafts(self, status: str | None = None) -> list[dict]:
+        sql = "SELECT id,topic_id,title,source_url,template,status,created_at,reviewed_at,reviewed_by FROM review_drafts"
+        if status:
+            sql += " WHERE status=?"
+            return self.query(sql + " ORDER BY created_at", (status,))
+        return self.query(sql + " ORDER BY created_at")
+
+    def review_draft(self, draft_id: int) -> dict | None:
+        rows = self.query("SELECT * FROM review_drafts WHERE id=?", (draft_id,))
+        return rows[0] if rows else None
+
+    @staticmethod
+    def _review_document(conn, draft_id: int) -> dict:
+        row = conn.execute("SELECT * FROM review_drafts WHERE id=?", (draft_id,)).fetchone()
+        if row is None:
+            raise KeyError("草稿不存在")
+        comments = conn.execute("SELECT * FROM review_draft_comments WHERE draft_id=? ORDER BY id", (draft_id,))
+        return {**dict(row), "draft_content": review_text(row["draft_content"]), "revision": _review_revision(row),
+                "comments": [dict(comment) for comment in comments]}
+
+    def review_document(self, draft_id: int) -> dict:
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            return self._review_document(conn, draft_id)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _check_review_version(document: dict, revision: str | None) -> None:
+        if document["status"] != "pending":
+            raise ReviewConflict("此草稿已被标记已阅，不能再修改或重复标记。")
+        if revision != document["revision"]:
+            raise ReviewConflict("草稿已被其他成员更新。请先保留本地改动，再关闭重开查看最新版。")
+
+    def edit_review_draft(self, draft_id: int, revision: str, content: str) -> dict:
+        content = review_text(content)
+        if not content.strip() or len(content) > 100_000:
+            raise ValueError("草稿正文须为 1–100,000 字符")
+        with self.transaction() as conn:
+            document = self._review_document(conn, draft_id)
+            self._check_review_version(document, revision)
+            before = document["draft_content"]
+            if content == before:
+                return document
+            prefix = suffix = 0
+            limit = min(len(before), len(content))
+            while prefix < limit and before[prefix] == content[prefix]:
+                prefix += 1
+            while suffix < limit - prefix and before[-suffix-1] == content[-suffix-1]:
+                suffix += 1
+            conn.execute("UPDATE review_drafts SET draft_content=?, edited_at=? WHERE id=?",
+                         (content, utcnow(), draft_id))
+            for comment in document["comments"]:
+                start, end = comment["start_offset"], comment["end_offset"]
+                if start is not None:
+                    start, end = _review_anchor(before, content, start, end, prefix, suffix)
+                    conn.execute("UPDATE review_draft_comments SET start_offset=?, end_offset=? WHERE id=?",
+                                 (start, end, comment["id"]))
+            return self._review_document(conn, draft_id)
+
+    def comment_on_review_draft(self, draft_id: int, revision: str, start: int, end: int,
+                                body: str, author: str) -> dict:
+        if not body.strip() or len(body) > 4000:
+            raise ValueError("批注须为 1–4,000 字符")
+        with self.transaction() as conn:
+            document = self._review_document(conn, draft_id)
+            self._check_review_version(document, revision)
+            text = document["draft_content"]
+            if not 0 <= start < end <= len(text) or end - start > 4000 or not text[start:end].strip():
+                raise ValueError("请选中 1–4,000 个正文字符后添加批注")
+            conn.execute("""INSERT INTO review_draft_comments
+                (draft_id,start_offset,end_offset,quote,body,author,created_at) VALUES(?,?,?,?,?,?,?)""",
+                         (draft_id, start, end, text[start:end], body.strip(), author, utcnow()))
+            return self._review_document(conn, draft_id)
+
+    def mark_review_draft(self, draft_id: int, reviewer: str, note: str = "", revision: str | None = None) -> None:
+        with self.transaction() as conn:
+            if revision is not None:
+                self._check_review_version(self._review_document(conn, draft_id), revision)
+            conn.execute("""UPDATE review_drafts SET status='reviewed', reviewed_at=?, reviewed_by=?
+                         WHERE id=?""", (utcnow(), reviewer or note or "", draft_id))
+
+    def reopen_review_draft(self, draft_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("""UPDATE review_drafts SET status='pending', reviewed_at=NULL, reviewed_by=NULL
+                         WHERE id=?""", (draft_id,))
+
+    def delete_review_draft(self, draft_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM review_draft_comments WHERE draft_id=?", (draft_id,))
+            conn.execute("DELETE FROM review_drafts WHERE id=?", (draft_id,))
 
     def audit(self, actor: str, action: str, target: str, details: Any) -> None:
         with self.transaction() as conn:

@@ -15,6 +15,25 @@ def handler_with_headers(**values):
 
 
 class SecurityTests(unittest.TestCase):
+    def test_password_transport_allows_local_and_configured_tls_only(self):
+        with patch.dict("os.environ", {"SPARK_TEAM_HTTPS_ORIGIN": "https://review.example"}):
+            local = handler_with_headers(Host="127.0.0.1:8765", Origin="http://127.0.0.1:8765")
+            local.client_address = ("127.0.0.1", 1000)
+            self.assertFalse(local._password_transport())
+
+            proxy = handler_with_headers(Host="review.example", Origin="https://review.example",
+                                         X_Forwarded_Proto="https")
+            proxy.client_address = ("127.0.0.1", 1000)
+            self.assertTrue(proxy._password_transport())
+            proxy.client_address = ("192.168.1.2", 1000)
+            with self.assertRaises(PermissionError):
+                proxy._password_transport()
+
+            lan = handler_with_headers(Host="192.168.1.4:8765", Origin="http://192.168.1.4:8765")
+            lan.client_address = ("192.168.1.2", 1000)
+            with self.assertRaises(PermissionError):
+                lan._password_transport()
+
     def test_local_mode_accepts_loopback_without_stale_csrf_token(self):
         handler = handler_with_headers(Host="127.0.0.1:8765", Origin="http://127.0.0.1:8765")
         with patch.object(server, "TEAM_MODE", False):

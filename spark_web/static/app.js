@@ -1,5 +1,5 @@
 let state=null,csrf="",currentTemplate="",currentKnowledge="",currentMeeting="",boardBucket="pre_review";
-const CLIENT_BUILD="2.9.4";
+const CLIENT_BUILD="2.10.5";
 let selectedTasks=new Set(),wlSelected=new Set(),miData=null,kbChunks=[],lastMeetingItems=null;
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
@@ -16,7 +16,8 @@ function empty(text){return `<div class="empty">${esc(text)}</div>`}
 const titles={overview:["WORKBENCH","工作台总览"],tasks:["TASKS","任务管理"],board:["NERVOUS TALK","项目看板"],timeline:["PROJECT HISTORY","项目时间线"],templates:["REPLY SYSTEM","回复模板"],draft:["AI ASSISTANT","AI 起草"],links:["RESOURCES","常用链接"],knowledge:["KNOWLEDGE BASE","知识库"],meetings:["COMMITTEE","会议纪要"],"meeting-items":["COMMITTEE QUEUE","上会项目"],notion:["AUTOMATION","Notion 同步"],audit:["SECURITY","审计记录"],settings:["CONFIGURATION","设置"]};
 function switchView(name){$$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===name));$$('.view').forEach(x=>x.classList.toggle('active',x.id===`view-${name}`));$("#sectionEyebrow").textContent=titles[name][0];$("#sectionTitle").textContent=titles[name][1];if(name==='audit')loadAudit();if(name==='meeting-items')renderMeetingItems();if(name==='knowledge')ensureKbChunks();if(name==='notion'&&!state.notion_overview)loadNotionOverview()}
 
-async function load(){try{state=await api("/api/workbench")}catch(e){if(!/登录/.test(e.message))throw e;const username=prompt("工作台用户名");const password=prompt("工作台密码");const login=await api("/api/login",{method:"POST",body:JSON.stringify({username,password})});csrf=login.csrf_token;state=await api("/api/workbench")}csrf=state.session.csrf_token;render()}
+function askTeamLogin(message=''){return new Promise((resolve,reject)=>{const box=document.createElement('dialog');box.className='team-login';box.innerHTML='<h2>使用 Nervos Talk 账号登录</h2><p class="muted">仅限 Spark 委员会的四个 Talk 账号。请使用本人的论坛密码，无需 API Key。</p><p class="login-error" role="alert"></p><form><label>Talk 用户名<input name="username" autocomplete="username" required></label><label>Talk 密码<input name="password" type="password" autocomplete="current-password" required></label><div class="actions"><button type="submit" class="primary">登录工作台</button></div></form>';document.body.append(box);box.querySelector('.login-error').textContent=message;const cleanup=()=>{box.close();box.remove()};box.querySelector('form').onsubmit=e=>{e.preventDefault();const username=box.querySelector('[name=username]').value.trim(),password=box.querySelector('[name=password]').value;box.querySelector('[name=password]').value='';cleanup();resolve({username,password})};box.oncancel=()=>{cleanup();reject(new Error('已取消登录'))};box.showModal();box.querySelector('[name=username]').focus()})}
+async function load(){try{state=await api("/api/workbench")}catch(e){if(!/登录/.test(e.message))throw e;requirePasswordTransport();let login=null;let message='';while(!login){const credentials=await askTeamLogin(message);try{login=await api("/api/login",{method:"POST",body:JSON.stringify(credentials)})}catch(error){message=error.message;continue}}csrf=login.csrf_token;state=await api("/api/workbench")}csrf=state.session.csrf_token;render();loadForumSettings();loadReviewBadge();loadAsrStatus()}
 function render(){renderOverview();renderTasks();renderBoardTabs();renderBoard();renderTimeline();renderProjectTracking();renderTemplates();renderDraftOptions();renderLinks();renderKnowledge();renderMeetings();renderNotion();renderSettings();$("#userBadge").textContent=`${state.session.username} · ${state.session.role}`;$("#connection").textContent=state.config.notion_configured?(state.config.auto_notion?"Notion 自动执行":"Notion 手动模式"):"Notion 待配置"}
 
 function boardClassified(){return state.board?.classified||{}}
@@ -128,13 +129,13 @@ async function parseMeetingText(mode){const text=$("#importMeetingRaw").value.tr
 async function confirmImportMeeting(){if(!importParsed||(!importParsed.date&&!importParsed.title&&!(importParsed.resolutions||[]).length))return toast('请先解析内容',true);try{const m=await api('/api/meetings',{method:'POST',body:JSON.stringify({date:importParsed.date||new Date().toISOString().slice(0,10),title:importParsed.title||'导入的会议',resolutions:importParsed.resolutions||[]})});currentMeeting=m.id;$("#importMeetingDialog").close();$("#importStatus").textContent='';await load();toast(`已导入会议纪要：${m.title}，共 ${(m.resolutions||[]).length} 条决议`)}catch(e){toast(e.message,true)}}
 
 /* ============================== 上会项目 ============================== */
-function renderMeetingItems(){if(!lastMeetingItems){$("#mi-in_progress").innerHTML=empty('点击「刷新上会项目」开始分析');$("#mi-pending").innerHTML='';$("#mi-submitted").innerHTML='';return}const items=lastMeetingItems.items||{};for(const key of['in_progress','pending','submitted']){const list=items[key]||[];$("#miCount-"+key).textContent=`(${list.length})`;$("#mi-"+key).innerHTML=list.map((it,i)=>{const mark=`${it.overdue_7d?'[超7天] ':''}${it.irrelevant_mark||''}`;return `<div class="mi-item" data-key="${key}" data-i="${i}"><strong>${esc(mark)}${esc(it.title)}</strong><small>${esc(it.author||'')} ${it.ai_summary?`· ${esc(it.ai_summary)}`:''}</small></div>`}).join('')||`<p class="muted mi-empty">无需上会</p>`;$$("#mi-"+key+" .mi-item").forEach(el=>{el.onclick=()=>showMiDetail(items[el.dataset.key][Number(el.dataset.i)]);el.ondblclick=()=>{const it=items[el.dataset.key][Number(el.dataset.i)];if(it.url)window.open(it.url,'_blank')}})}$("#miStatus").textContent=lastMeetingItems.updated_at?`最后分析：${fmtDate(lastMeetingItems.updated_at)}`:''
+function renderMeetingItems(){if(!lastMeetingItems){$("#mi-in_progress").innerHTML=empty('点击「刷新上会项目」开始分析');$("#mi-pending").replaceChildren();$("#mi-submitted").replaceChildren();return}const items=lastMeetingItems.items||{};for(const key of['in_progress','pending','submitted']){const list=items[key]||[];$("#miCount-"+key).textContent=`(${list.length})`;$("#mi-"+key).innerHTML=list.map((it,i)=>{const mark=`${it.overdue_7d?'[超7天] ':''}${it.irrelevant_mark||''}`;return `<div class="mi-item" data-key="${key}" data-i="${i}"><strong>${esc(mark)}${esc(it.title)}</strong><small>${esc(it.author||'')} ${it.ai_summary?`· ${esc(it.ai_summary)}`:''}</small></div>`}).join('')||`<p class="muted mi-empty">无需上会</p>`;$$("#mi-"+key+" .mi-item").forEach(el=>{el.onclick=()=>showMiDetail(items[el.dataset.key][Number(el.dataset.i)]);el.ondblclick=()=>{const it=items[el.dataset.key][Number(el.dataset.i)];if(it.url)window.open(it.url,'_blank')}})}$("#miStatus").textContent=lastMeetingItems.updated_at?`最后分析：${fmtDate(lastMeetingItems.updated_at)}`:''
 }
 function showMiDetail(it){if(!it)return;const status=[];if(it.overdue_7d)status.push('委员会回复超7天未收到发帖人回应');else status.push('委员会未回复发帖人最新消息');if(it.irrelevant_mark)status.push('含无关回复');$("#miDetail").innerHTML=`<h2>${esc(it.title||'Unknown')}</h2><p class="muted">作者: ${esc(it.author||'Unknown')} · 分类: ${esc(it.category||'')}</p><p>${esc(status.join('　'))}</p><p><strong>AI 总结:</strong> ${esc(it.ai_summary||'—')}</p><h3>发帖人最新回复</h3><p class="pre-wrap">${esc(it.latest_op_content||'无内容')}</p><div class="actions"><a class="button-link" href="${esc(it.url)}" target="_blank" rel="noreferrer">打开帖子 ↗</a></div>`}
 async function refreshMeetingItems(){const b=$("#miRefresh");try{b.disabled=true;b.textContent='正在分析…';$("#miStatus").textContent='正在获取帖子详情，帖子较多时可能需要几分钟…';const v=await api('/api/meeting-items/refresh',{method:'POST',body:'{}'});lastMeetingItems=v;renderMeetingItems();$("#miStatus").textContent='正在生成 AI 总结…';try{const s=await api('/api/meeting-items/summarize',{method:'POST',body:'{}'});if(s.items){lastMeetingItems.items=s.items;lastMeetingItems.updated_at=s.updated_at}renderMeetingItems()}catch(e){/* 无 API Key 时跳过 */}}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='🔄 刷新上会项目'}}
 
 /* ============================== Notion / 设置 / 审计 ============================== */
-function renderNotion(){const jobs=(state.jobs||[]);const active=jobs.filter(x=>!x.stale);$("#nPending").textContent=active.filter(x=>['queued','partial','ready','needs_input'].includes(x.status)).length;$("#nConflict").textContent=active.filter(x=>x.status==='conflict').length;$("#nVerified").textContent=jobs.filter(x=>x.status==='verified'||x.status==='core_verified').length;const groups={};jobs.forEach(j=>{const k=String(j.topic_id||'unknown');(groups[k]=groups[k]||[]).push(j)});const act=g=>g.some(x=>!x.stale)?0:1;const sorted=Object.entries(groups).sort((a,b)=>act(a[1])-act(b[1])||String((a[1][0]||{}).project_name||a[0]).localeCompare(String((b[1][0]||{}).project_name||b[0])));$("#projectJobs").innerHTML=sorted.map(([k,v])=>projectJobCard(k,v)).join('')||empty('暂无同步作业');renderNotionSources()}
+function renderNotion(){const jobs=(state.jobs||[]);const active=jobs.filter(x=>!x.stale);$("#nPending").textContent=active.filter(x=>['queued','partial','ready','needs_input'].includes(x.status)).length;$("#nConflict").textContent=active.filter(x=>x.status==='conflict').length;$("#nVerified").textContent=jobs.filter(x=>x.status==='verified'||x.status==='core_verified').length;const groups=Object.groupBy(jobs,j=>String(j.topic_id||'unknown'));const act=g=>g.some(x=>!x.stale)?0:1;const sorted=Object.entries(groups).sort((a,b)=>act(a[1])-act(b[1])||String((a[1][0]||{}).project_name||a[0]).localeCompare(String((b[1][0]||{}).project_name||b[0])));$("#projectJobs").innerHTML=sorted.map(([k,v])=>projectJobCard(k,v)).join('')||empty('暂无同步作业');renderNotionSources()}
 function projectJobCard(topicId,jobs){const first=jobs[0]||{};const name=first.project_name||`帖子 ${topicId}`;const applicant=first.applicant||'';const rows=jobs.map(j=>`<div class="item"><div><strong>${esc(j.workflow)}</strong><p class="muted"><small>帖子 ${esc(j.topic_id)}</small></p><p>${esc(j.last_error||'')}</p><div>${(j.steps||[]).map(s=>tag(`${s.step}: ${s.status}`)).join(' ')}${j.stale?tag('已被覆盖'):''}</div>${j.payload&&!j.stale?`<button class="load-job" data-key="${esc(j.idempotency_key)}">载入修正</button>`:''} ${j.stale?`<button class="dismiss-job" data-key="${esc(j.idempotency_key)}">忽略</button>`:''}</div>${tag(j.status)}</div>`).join('');return `<article class="card"><h3>${esc(name)}</h3><p>${applicant?`申请人：${esc(applicant)}`:'&nbsp;'}</p><div class="stack">${rows}</div></article>`}
 const NOTION_SOURCE_NAMES={fund_allocations:'资金分配表 / Fund Allocations',transactions:'交易记录表 / Transactions',ongoing_projects:'进行中项目表 / Ongoing Projects',completed_projects:'已完成项目表 / Completed Projects'};
 async function loadNotionOverview(){try{state.notion_overview=await api('/api/notion/overview');renderNotionSources()}catch(e){/* 未配置 Notion 时静默 */}}
@@ -147,20 +148,20 @@ function locatePreviewRow(rowEl){clearRowHighlight();const pid=rowEl.dataset.pid
 // 改为服务端经匿名数据接口拉 recordMap，本地渲染成表格；双击单元格可直接写回 Notion。
 let previewTabs=[],previewLoaded=new Set(),previewActive=0,previewData={};
 async function loadNotionPreview(){try{const v=await api('/api/notion/preview');previewTabs=(v&&v.tabs)||[]}catch(e){previewTabs=[]}renderPreviewTabs()}
-function renderPreviewTabs(){const bar=$("#previewTabs"),box=$("#previewFrames");if(!bar||!box)return;previewLoaded=new Set();previewData={};if(!previewTabs.length){bar.innerHTML='';box.innerHTML='<p class="muted preview-empty">未配置预览页面</p>';return}bar.innerHTML=previewTabs.map((t,i)=>`<span class="preview-tab"><button data-pi="${i}" class="${i===0?'active':''}">${esc(t.label)}</button>${t.url?`<a class="preview-open-link" href="${esc(t.url)}" target="_blank" rel="noreferrer" title="在 Notion 中打开">↗</a>`:''}</span>`).join('');box.innerHTML=previewTabs.map((t,i)=>`<div class="preview-pane" data-pi="${i}" style="display:${i===0?'':'none'}"><div class="preview-loading muted">加载中…</div></div>`).join('');bar.querySelectorAll('button').forEach(b=>b.onclick=()=>activatePreview(Number(b.dataset.pi)));activatePreview(0)}
+function renderPreviewTabs(){const bar=$("#previewTabs"),box=$("#previewFrames");if(!bar||!box)return;previewLoaded=new Set();previewData={};if(!previewTabs.length){bar.replaceChildren();box.innerHTML='<p class="muted preview-empty">未配置预览页面</p>';return}bar.innerHTML=previewTabs.map((t,i)=>`<span class="preview-tab"><button data-pi="${i}" class="${i===0?'active':''}">${esc(t.label)}</button>${t.url?`<a class="preview-open-link" href="${esc(t.url)}" target="_blank" rel="noreferrer" title="在 Notion 中打开">↗</a>`:''}</span>`).join('');box.innerHTML=previewTabs.map((t,i)=>`<div class="preview-pane" data-pi="${i}" style="display:${i===0?'':'none'}"><div class="preview-loading muted">加载中…</div></div>`).join('');bar.querySelectorAll('button').forEach(b=>b.onclick=()=>activatePreview(Number(b.dataset.pi)));activatePreview(0)}
 function activatePreview(i){previewActive=i;const bar=$("#previewTabs"),box=$("#previewFrames");if(!bar||!box)return;bar.querySelectorAll('button').forEach(b=>b.classList.toggle('active',Number(b.dataset.pi)===i));box.querySelectorAll('.preview-pane').forEach(p=>{const on=Number(p.dataset.pi)===i;p.style.display=on?'':'none';if(on&&!previewLoaded.has(i)){previewLoaded.add(i);loadPreviewTable(i)}});renderNotionSources()}
 async function loadPreviewTable(i,force){const pane=$("#previewFrames")&&$("#previewFrames").querySelector(`.preview-pane[data-pi="${i}"]`);const tab=previewTabs[i];if(!pane||!tab)return;pane.innerHTML='<div class="preview-loading muted">正在从 Notion 拉取数据…</div>';try{const v=await api(`/api/notion/preview-table?key=${encodeURIComponent(tab.key)}${force?'&refresh=1':''}`);previewData[i]=v;pane.innerHTML=previewTableHtml(v,i);bindPreviewEditing(pane,i);const rb=pane.querySelector('.preview-refresh');if(rb)rb.onclick=()=>loadPreviewTable(i,true)}catch(e){pane.innerHTML=`<div class="preview-error">⚠ ${esc(e.message||'加载失败')}<br><a href="${esc(tab.url||'')}" target="_blank" rel="noreferrer">在 Notion 中打开 ↗</a></div>`}}
 function previewTableHtml(v,i){const cols=v.columns||[];const widths=cols.map(c=>`<col style="width:${Math.min(480,Math.max(96,c.width||180))}px">`).join('');const head=cols.map(c=>`<th>${esc(c.name)}</th>`).join('');const body=(v.rows||[]).map(r=>`<tr data-row="${esc(r._row_id||'')}">${cols.map(c=>`<td data-col="${esc(c.name)}">${r[c.key]||''}</td>`).join('')}</tr>`).join('');const incomplete=v.incomplete?'<span class="preview-incomplete" title="匿名接口行数受限，部分行可能未显示">⚠ 可能不全</span> ':'';return `<div class="preview-meta muted">${incomplete}${esc(v.title||'')} · ${(v.rows||[]).length} 行 · ${fmtDate(v.fetched_at)} · 双击单元格可编辑</div><div class="preview-scroll"><table class="preview-table">${widths}<thead><tr>${head}</tr></thead><tbody>${body||`<tr><td colspan="${cols.length||1}" class="muted">空表</td></tr>`}</tbody></table></div><div class="preview-meta muted"><button class="preview-refresh">刷新</button></div>`}
 function bindPreviewEditing(pane,i){if(!pane||!previewTabs[i])return;pane.querySelectorAll('.preview-table tbody td').forEach(td=>{td.ondblclick=()=>startCellEdit(td,i)})}
-function startCellEdit(td,i){if(td.querySelector('input')||td.closest('tr')&&td.closest('tr').dataset.row==='')return;const tab=previewTabs[i];const rowId=td.closest('tr').dataset.row;const colName=td.dataset.col;const original=td.innerHTML;const originalText=td.innerText;const input=document.createElement('input');input.type='text';input.value=originalText;input.className='cell-editor';td.innerHTML='';td.appendChild(input);input.focus();input.select();let done=false;const finish=async(commit)=>{if(done)return;done=true;if(!commit){td.innerHTML=original;return}const value=input.value;if(value===originalText){td.innerHTML=original;return}td.innerHTML='<span class="muted">保存中…</span>';try{await api('/api/notion/preview-edit',{method:'POST',body:JSON.stringify({key:tab.key,row_id:rowId,column:colName,value})});toast(`已写回 Notion：${colName}`);await loadPreviewTable(i,true)}catch(e){td.innerHTML=original;toast(e.message,true)}};input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();finish(true)}else if(e.key==='Escape'){finish(false)}};input.onblur=()=>finish(true)}
+function startCellEdit(td,i){if(td.querySelector('input')||td.closest('tr')&&td.closest('tr').dataset.row==='')return;const tab=previewTabs[i];const rowId=td.closest('tr').dataset.row;const colName=td.dataset.col;const original=td.innerHTML;const originalText=td.innerText;const input=document.createElement('input');input.type='text';input.value=originalText;input.className='cell-editor';td.replaceChildren(input);input.focus();input.select();let done=false;const finish=async(commit)=>{if(done)return;done=true;if(!commit){td.innerHTML=original;return}const value=input.value;if(value===originalText){td.innerHTML=original;return}td.innerHTML='<span class="muted">保存中…</span>';try{await api('/api/notion/preview-edit',{method:'POST',body:JSON.stringify({key:tab.key,row_id:rowId,column:colName,value})});toast(`已写回 Notion：${colName}`);await loadPreviewTable(i,true)}catch(e){td.innerHTML=original;toast(e.message,true)}};input.onkeydown=e=>{if(e.key==='Enter'){if(e.isComposing||e.keyCode===229)return;e.preventDefault();finish(true)}else if(e.key==='Escape'){finish(false)}};input.onblur=()=>finish(true)}
 /* ============================== 链上交易检索 ============================== */
 let chainPreview={mode:null,only:[]};
 const CHAIN_DIRECTION_NAMES={out:'提款',in:'存款'};
 function chainRowHtml(row,extra=''){return `<div class="chain-row"><strong>${esc(row.tx_hash||'')}</strong><br><span class="muted">${esc(row.date||'—')} · ${esc(row.type||'')} · ${esc(row.amount||'')}${row.direction?` · ${esc(CHAIN_DIRECTION_NAMES[row.direction]||row.direction)}`:''}</span>${row.purpose?`<br><span>${esc(row.purpose)}</span>`:''}${extra}</div>`}
-async function scanChainMain(){const b=$('#scanChainMain'),st=$('#chainScanStatus'),box=$('#chainPreview');try{b.disabled=true;b.textContent='正在拉取链上交易…';st.textContent='主钱包全量检索中，可能需要几分钟';box.innerHTML='';const v=await api('/api/chain/scan-main');chainPreview={mode:'main',only:(v.missing||[]).map(r=>r.tx_hash)};const rows=[...(v.missing||[]).map(r=>chainRowHtml(r)),...(v.mismatched||[]).map(r=>chainRowHtml(r,`<br><span class="muted">已有记录与链上推导不同（仅提示，绝不覆盖）：${esc(Object.entries(r.diffs||{}).map(([k,d])=>`${k} ${d.actual||'空'} ↔ ${d.expected}`).join('；'))}</span>`)),...(v.extra||[]).map(r=>`<div class="chain-row"><strong>${esc(r.tx_hash||'')}</strong><br><span class="muted">历史或手填记录（当前链上索引未返回；自动保留，绝不删除）</span></div>`)];box.innerHTML=`<div class="chain-summary"><span>数据时间 ${esc(fmtDate(v.updated_at))}</span><span>已扫描 ${v.scanned??0} 笔</span><span>将新增 <strong>${(v.missing||[]).length}</strong> 行</span><span>差异但保留 <strong>${(v.mismatched||[]).length}</strong> 行</span><span>历史/手填保留 <strong>${(v.extra||[]).length}</strong> 行</span><span class="flex-spacer"></span><button id="applyChainMain" class="primary" ${chainPreview.only.length?'':'disabled'}>确认新增（不修改已有行）</button></div>`+(rows.join('')||empty('链上与表单一致，没有差异'));const apply=$('#applyChainMain');if(apply)apply.onclick=applyChainMain;st.textContent='预览完成；自动写入只会新增，不会修改或删除已有记录'}catch(e){st.textContent='';toast(e.message,true)}finally{b.disabled=false;b.textContent='检索主钱包交易'}}
-async function applyChainMain(){const b=$('#applyChainMain');if(!chainPreview.only.length)return toast('没有需要新增的交易',true);try{b.disabled=true;b.textContent='正在新增…';const v=await api('/api/chain/apply-main',{method:'POST',body:JSON.stringify({only:chainPreview.only})});await loadNotionOverview();toast(`写入完成\n新增 ${(v.created||[]).length} 行：${(v.created||[]).join(', ')||'无'}\n已有记录保持原样 ${(v.preserved||[]).length} 行\n跳过 ${(v.skipped||[]).length} 行\n失败 ${(v.errors||[]).length} 行${(v.errors||[]).length?'\n'+v.errors.map(x=>`${x.tx_hash}: ${x.error}`).join('\n'):''}`,(v.errors||[]).length>0);$('#chainPreview').innerHTML=''}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='确认新增（不修改已有行）'}}
-async function scanChainMultisig(){const b=$('#scanChainMultisig'),st=$('#chainScanStatus'),box=$('#chainPreview');try{b.disabled=true;b.textContent='正在拉取多签交易…';st.textContent='检索各项目多签钱包中，可能需要几分钟';box.innerHTML='';const v=await api('/api/chain/scan-multisig');const items=v.multisig||[];chainPreview={mode:'multisig',only:items.flatMap(m=>(m.rows||[]).map(r=>r.tx_hash))};let totalRows=0,totalExisting=0;const sections=items.map(m=>{totalRows+=(m.rows||[]).length;totalExisting+=m.existing||0;return `<div class="chain-row"><strong>${esc(m.project||m.multisig)}</strong><br><span class="muted">${esc(m.multisig||'')} · 已有 ${m.existing||0} 行</span>${m.source?'':'<br><span class="muted">⚠ 项目页缺少「资金使用情况」内联库</span>'}${(m.rows||[]).map(r=>chainRowHtml(r)).join('')}</div>`});box.innerHTML=`<div class="chain-summary"><span>数据时间 ${esc(fmtDate(v.updated_at))}</span><span>已知项目多签 <strong>${items.length}</strong> 个</span><span>将新增 <strong>${totalRows}</strong> 行</span><span>内联库已有 ${totalExisting} 行</span><span class="flex-spacer"></span><button id="applyChainMultisig" class="primary" ${totalRows?'':'disabled'}>确认写入</button></div>`+(sections.join('')||empty('没有发现符合条件的项目多签或缺失交易'));const apply=$('#applyChainMultisig');if(apply)apply.onclick=applyChainMultisig;st.textContent='预览完成，请核对后再确认写入'}catch(e){st.textContent='';toast(e.message,true)}finally{b.disabled=false;b.textContent='检索多签钱包交易'}}
-async function applyChainMultisig(){const b=$('#applyChainMultisig');try{b.disabled=true;b.textContent='正在写入…';const v=await api('/api/chain/apply-multisig',{method:'POST',body:'{}'});toast(`写入完成：新增 ${(v.written||[]).length} 行${(v.errors||[]).length?`\n失败 ${v.errors.length} 行：${v.errors.map(x=>`${x.multisig||''} ${x.tx_hash||''}: ${x.error}`).join('\n')}`:''}`,(v.errors||[]).length>0);$('#chainPreview').innerHTML=''}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='确认写入'}}
+async function scanChainMain(){const b=$('#scanChainMain'),st=$('#chainScanStatus'),box=$('#chainPreview');try{b.disabled=true;b.textContent='正在拉取链上交易…';st.textContent='主钱包全量检索中，可能需要几分钟';box.replaceChildren();const v=await api('/api/chain/scan-main');if(v.notice)toast(v.notice);chainPreview={mode:'main',only:(v.missing||[]).map(r=>r.tx_hash)};const rows=[...(v.missing||[]).map(r=>chainRowHtml(r)),...(v.mismatched||[]).map(r=>chainRowHtml(r,`<br><span class="muted">已有记录与链上推导不同（仅提示，绝不覆盖）：${esc(Object.entries(r.diffs||{}).map(([k,d])=>`${k} ${d.actual||'空'} ↔ ${d.expected}`).join('；'))}</span>`)),...(v.extra||[]).map(r=>`<div class="chain-row"><strong>${esc(r.tx_hash||'')}</strong><br><span class="muted">历史或手填记录（当前链上索引未返回；自动保留，绝不删除）</span></div>`)];box.innerHTML=`<div class="chain-summary"><span>数据时间 ${esc(fmtDate(v.updated_at))}</span><span>已扫描 ${v.scanned??0} 笔</span><span>将新增 <strong>${(v.missing||[]).length}</strong> 行</span><span>差异但保留 <strong>${(v.mismatched||[]).length}</strong> 行</span><span>历史/手填保留 <strong>${(v.extra||[]).length}</strong> 行</span><span class="flex-spacer"></span><button id="applyChainMain" class="primary" ${chainPreview.only.length?'':'disabled'}>确认新增（不修改已有行）</button></div>`+(rows.join('')||empty('链上与表单一致，没有差异'));const apply=$('#applyChainMain');if(apply)apply.onclick=applyChainMain;st.textContent='预览完成；自动写入只会新增，不会修改或删除已有记录'}catch(e){st.textContent='';toast(e.message,true)}finally{b.disabled=false;b.textContent='检索主钱包交易'}}
+async function applyChainMain(){const b=$('#applyChainMain');if(!chainPreview.only.length)return toast('没有需要新增的交易',true);try{b.disabled=true;b.textContent='正在新增…';const v=await api('/api/chain/apply-main',{method:'POST',body:JSON.stringify({only:chainPreview.only})});await loadNotionOverview();toast(`写入完成\n新增 ${(v.created||[]).length} 行：${(v.created||[]).join(', ')||'无'}\n已有记录保持原样 ${(v.preserved||[]).length} 行\n跳过 ${(v.skipped||[]).length} 行\n失败 ${(v.errors||[]).length} 行${(v.errors||[]).length?'\n'+v.errors.map(x=>`${x.tx_hash}: ${x.error}`).join('\n'):''}`,(v.errors||[]).length>0);$('#chainPreview').replaceChildren()}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='确认新增（不修改已有行）'}}
+async function scanChainMultisig(){const b=$('#scanChainMultisig'),st=$('#chainScanStatus'),box=$('#chainPreview');try{b.disabled=true;b.textContent='正在拉取多签交易…';st.textContent='检索各项目多签钱包中，可能需要几分钟';box.replaceChildren();const v=await api('/api/chain/scan-multisig');if(v.notice)toast(v.notice);const items=v.multisig||[];chainPreview={mode:'multisig',only:items.flatMap(m=>(m.rows||[]).map(r=>r.tx_hash))};let totalRows=0,totalExisting=0;const sections=items.map(m=>{totalRows+=(m.rows||[]).length;totalExisting+=m.existing||0;return `<div class="chain-row"><strong>${esc(m.project||m.multisig)}</strong><br><span class="muted">${esc(m.multisig||'')} · 已有 ${m.existing||0} 行</span>${m.source?'':'<br><span class="muted">⚠ 项目页缺少「资金使用情况」内联库</span>'}${(m.rows||[]).map(r=>chainRowHtml(r)).join('')}</div>`});box.innerHTML=`<div class="chain-summary"><span>数据时间 ${esc(fmtDate(v.updated_at))}</span><span>已知项目多签 <strong>${items.length}</strong> 个</span><span>将新增 <strong>${totalRows}</strong> 行</span><span>内联库已有 ${totalExisting} 行</span><span class="flex-spacer"></span><button id="applyChainMultisig" class="primary" ${totalRows?'':'disabled'}>确认写入</button></div>`+(sections.join('')||empty('没有发现符合条件的项目多签或缺失交易'));const apply=$('#applyChainMultisig');if(apply)apply.onclick=applyChainMultisig;st.textContent='预览完成，请核对后再确认写入'}catch(e){st.textContent='';toast(e.message,true)}finally{b.disabled=false;b.textContent='检索多签钱包交易'}}
+async function applyChainMultisig(){const b=$('#applyChainMultisig');try{b.disabled=true;b.textContent='正在写入…';const v=await api('/api/chain/apply-multisig',{method:'POST',body:'{}'});toast(`写入完成：新增 ${(v.written||[]).length} 行${(v.errors||[]).length?`\n失败 ${v.errors.length} 行：${v.errors.map(x=>`${x.multisig||''} ${x.tx_hash||''}: ${x.error}`).join('\n')}`:''}`,(v.errors||[]).length>0);$('#chainPreview').replaceChildren()}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='确认写入'}}
 
 // 「显示上次结果」：只读服务端扫描缓存渲染到预览区，不触发链上检索，也不提供写入按钮
 function chainCacheNote(updatedAt,count){return `<div class="chain-summary"><span>缓存数据时间 ${esc(fmtDate(updatedAt))}</span><span>共 <strong>${count}</strong> 条</span><span class="muted">（上次检索结果，只读显示；点「检索」按钮可续查更新）</span></div>`}
@@ -174,16 +175,18 @@ const sections=items.map(m=>{totalRows+=(m.rows||[]).length;totalExisting+=m.exi
 box.innerHTML=chainCacheNote(v.updated_at,totalRows)+`<div class="chain-summary"><span>已知项目多签 <strong>${items.length}</strong> 个</span><span>内联库已有 ${totalExisting} 行</span></div>`+(sections.join('')||empty('缓存结果为空'));st.textContent='已显示上次多签扫描缓存'}catch(e){st.textContent='';toast(e.message,true)}}
 
 function renderSettings(){$("#settingProvider").value=state.ai?.provider||'siliconflow';$("#settingModel").value=state.ai?.model||'';$("#settingAutoNotion").checked=!!state.config?.auto_notion;$("#settingTeamMode").checked=!!state.config?.team_mode;$("#systemFacts").innerHTML=`<div><span>程序版本</span><strong>${esc(state.config.version||'未知')}</strong></div><div><span>服务地址</span><strong>${esc(location.host)}</strong></div><div><span>页面关闭</span><strong>自动释放端口</strong></div><div><span>团队模式</span><strong>${state.config.team_mode?'已开启':'关闭'}</strong></div><div><span>Notion Token</span><strong>${state.config.notion_configured?'已配置':'未配置'}</strong></div><div><span>自动写入</span><strong>${state.config.auto_notion?'开启':'关闭'}</strong></div><div><span>AI Key</span><strong>${state.ai?.has_key?'已配置':'未配置'}</strong></div>`}
+async function loadForumSettings(){try{state.forum_settings=await api('/api/settings/forum');renderForumSettings()}catch(e){/* 旧版本服务端或无权限时静默 */}}
+function renderForumSettings(){const v=state.forum_settings||{},team=state.config?.team_mode,input=$("#settingTalkUsername");if(input&&document.activeElement!==input){input.value=(team?state.session?.forum_username:v.talk_username)||'';input.disabled=!!team}const hint=$("#forumSettingsHint");if(hint)hint.textContent=(team?'团队身份由管理员配置；':'')+'正式发布时单次输入本人 Talk 密码，不需要个人 API Key。'+(v.talk_password_saved?' 检测到旧版存储的密码，工作台不再使用，请按部署文档清理。':'');const hf=$('#hfTokenHint');if(hf)hf.textContent=v.hf_token_configured?'HF Token 已配置：说话人分离模型可直接下载':'未配置 HF Token：说话人分离需要在 huggingface.co/settings/tokens 申请（read 权限即可）'}
 async function loadAudit(){try{const v=await api('/api/audit');$("#auditRows").innerHTML=(v.events||[]).map(x=>`<tr><td>${esc(fmtDate(x.created_at))}</td><td>${esc(x.actor)}</td><td>${esc(x.action)}</td><td>${esc(x.target)}</td><td><small>${esc(x.details_json)}</small></td></tr>`).join('')||`<tr><td colspan="5">${empty('暂无审计记录')}</td></tr>`}catch(e){toast(e.message,true)}}
 
 /* ============================== 事件绑定 ============================== */
-$$('.nav-item').forEach(x=>x.onclick=()=>switchView(x.dataset.view));$$('[data-jump]').forEach(x=>x.onclick=()=>switchView(x.dataset.jump));
-$("#refresh").onclick=async()=>{const b=$("#refresh");try{b.disabled=true;b.textContent='正在扫描并同步…';const v=await api('/api/refresh',{method:'POST',body:'{}'});toast(`刷新完成\n新项目/补做：${(v.new_projects||[]).join(', ')||'无'}\n周报：${(v.weekly_updates||[]).join(', ')||'无'}\n状态迁移：${(v.transitions||[]).join(', ')||'无'}${v.ai_classified?`\nAI 分类：提案 ${v.ai_classify_counts?.pre_review??0} / 非提案 ${v.ai_classify_counts?.non_proposal??0}`:''}${v.auto_tasks?`\n自动建任务 ${v.auto_tasks.length} 条`:''}\n错误：${(v.errors||[]).join('\n')||'无'}`,(v.errors||[]).length>0);await load()}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='刷新并自动同步'}};
+$$('.nav-item').forEach(x=>x.onclick=()=>x.dataset.view==='review'?openReviewQueue():switchView(x.dataset.view));$$('[data-jump]').forEach(x=>x.onclick=()=>switchView(x.dataset.jump));
+$("#refresh").onclick=async()=>{const b=$("#refresh");try{b.disabled=true;b.textContent='正在扫描并同步…';const v=await api('/api/refresh',{method:'POST',body:'{}'});toast(`刷新完成\n新项目/补做：${(v.new_projects||[]).join(', ')||'无'}\n周报：${(v.weekly_updates||[]).join(', ')||'无'}\n状态迁移：${(v.transitions||[]).join(', ')||'无'}${v.ai_classified?`\nAI 分类：提案 ${v.ai_classify_counts?.pre_review??0} / 非提案 ${v.ai_classify_counts?.non_proposal??0}`:''}${v.auto_tasks?`\n自动建任务 ${v.auto_tasks.length} 条`:''}\n扫描帖子：${v.scanned??'—'} 条${v.notion_configured?(v.auto_notion?'\nNotion：已配置 Token，自动写入已按开关执行':'\nNotion：已配置 Token，但自动写入开关关闭（可在设置页开启，或到 Notion 同步页手动执行）'):'\nNotion：未配置 Token，本轮仅完成论坛刷新与本地分类，未写入 Notion（可在设置页配置）'}\n错误：${(v.errors||[]).join('\n')||'无'}`,(v.errors||[]).length>0);await load()}catch(e){toast(e.message,true)}finally{b.disabled=false;b.textContent='刷新并自动同步'}};
 $("#taskSearch").oninput=renderTasks;$("#taskFilter").onchange=renderTasks;$("#addTask").onclick=()=>openTask();$("#saveTask").onclick=()=>saveTask().catch(e=>toast(e.message,true));
 $("#selectAllTasks").onchange=e=>{const rows=$$("#taskRows .row-check");rows.forEach(x=>{x.checked=e.target.checked;if(e.target.checked)selectedTasks.add(Number(x.dataset.id));else selectedTasks.delete(Number(x.dataset.id))});updateTaskSelectionUI()};
 $("#batchComplete").onclick=()=>batchTasks('complete');$("#batchDelete").onclick=()=>batchTasks('delete');$("#exportTasksMd").onclick=exportTasksMd;
 $("#timelineSearch").oninput=renderTimeline;$("#timelineLimit").onchange=renderTimeline;$("#toggleRejectedTimeline").onclick=()=>{timelineRejectionsCollapsed=!timelineRejectionsCollapsed;renderTimeline()};$("#refreshTimelinePosts").onclick=refreshTimelinePosts;
-$$('[data-timeline-tab]').forEach(x=>x.onclick=()=>switchTimelineTab(x.dataset.timelineTab));$("#trackingSearch").oninput=renderProjectTracking;$("#trackingStatus").onchange=renderProjectTracking;$("#refreshTracking").onclick=()=>refreshProjectTracking('active');$("#rebuildTrackingAll").onclick=()=>refreshProjectTracking('all');$("#syncTrackingFunding").onclick=()=>syncTrackingFunding(false);$("#importTrackingText").onclick=()=>$("#importTrackingDialog").showModal();$("#confirmImportTracking").onclick=confirmImportTracking;$("#importTrackingZip").onclick=()=>$("#trackingZipFile").click();$("#trackingZipFile").onchange=e=>importTrackingZip(e.target.files[0]);const trackingPane=$("#timelineTrackingPane");trackingPane.ondragover=e=>{if([...e.dataTransfer.items].some(item=>item.kind==='file')){e.preventDefault();e.dataTransfer.dropEffect='copy'}};trackingPane.ondrop=e=>{e.preventDefault();importTrackingZip(e.dataTransfer.files[0])};
+$$('[data-timeline-tab]').forEach(x=>x.onclick=()=>switchTimelineTab(x.dataset.timelineTab));$("#trackingSearch").oninput=renderProjectTracking;$("#trackingStatus").onchange=renderProjectTracking;const trackingFreeze=$("#trackingFreezeCol");const applyTrackingFreeze=()=>{const on=trackingFreeze.checked;$("#timelineTrackingPane").querySelector(".tracking-wrap")?.classList.toggle("tracking-freeze",on);try{localStorage.setItem("trackingFreezeCol",on?"1":"0")}catch(e){}};try{const savedFreeze=localStorage.getItem("trackingFreezeCol");if(savedFreeze!==null)trackingFreeze.checked=savedFreeze==="1"}catch(e){}trackingFreeze.onchange=applyTrackingFreeze;applyTrackingFreeze();$("#refreshTracking").onclick=()=>refreshProjectTracking('active');$("#rebuildTrackingAll").onclick=()=>refreshProjectTracking('all');$("#syncTrackingFunding").onclick=()=>syncTrackingFunding(false);/* importTrackingText 通过 commandfor/command="show-modal" 声明式打开对话框 */$("#confirmImportTracking").onclick=confirmImportTracking;$("#importTrackingZip").onclick=()=>$("#trackingZipFile").click();$("#trackingZipFile").onchange=e=>importTrackingZip(e.target.files[0]);const trackingPane=$("#timelineTrackingPane");trackingPane.ondragover=e=>{if([...e.dataTransfer.items].some(item=>item.kind==='file')){e.preventDefault();e.dataTransfer.dropEffect='copy'}};trackingPane.ondrop=e=>{e.preventDefault();importTrackingZip(e.dataTransfer.files[0])};
 $("#trackingRows").onchange=e=>{const select=e.target.closest('.tracking-weekday');if(select)editTrackingWeekday(select)};
 $("#timelineRows").onclick=e=>{const row=e.target.closest('.timeline-track-row');if(row&&!e.target.closest('a,button,input,select'))jumpToTracking(row.dataset.topic)};
 document.addEventListener('click',e=>{const button=e.target.closest('.jump-tracking');if(button)jumpToTracking(button.dataset.topic)});
@@ -193,7 +196,43 @@ $("#draftFromTemplate").onclick=()=>{if(!currentTemplate)return toast('请先选
 $("#taskFromTemplate").onclick=async()=>{if(!currentTemplate)return toast('请先选择模板',true);const title=`使用【${currentTemplate}】模板回帖/发帖`;try{await api('/api/tasks',{method:'POST',body:JSON.stringify({title,type:quickTaskType(title),project:'',deadline:'',note:'',link:''})});await load();toast(`已添加任务：${title}`)}catch(e){toast(e.message,true)}};
 $("#generateDraft").onclick=generateDraft;$("#copyDraft").onclick=()=>navigator.clipboard.writeText($("#draftOutput").value).then(()=>toast('已复制'));
 $("#translateDraft").onclick=async()=>{try{const v=await api('/api/ai/translate',{method:'POST',body:JSON.stringify({text:$("#draftOutput").value})});$("#draftOutput").value=v.content}catch(e){toast(e.message,true)}};
-$("#publishDraft").onclick=async()=>{try{const m=$("#draftUrl").value.match(/\/t\/(?:[^/]+\/)?(\d+)/);if(!m)throw new Error('请先填写有效的项目帖子 URL');if(prompt('这是公开发帖操作。输入“正式发布”确认')!=='正式发布')return;const v=await api('/api/forum/post',{method:'POST',body:JSON.stringify({topic_id:m[1],raw:$("#draftOutput").value,confirmation:'正式发布'})});toast(`已发布为第 ${v.post_number} 楼`)}catch(e){toast(e.message,true)}};
+function requirePasswordTransport(){
+  if(location.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(location.hostname))
+    throw new Error('请从本机或私有 HTTPS 入口访问，勿通过局域网 HTTP 输入 Talk 密码');
+}
+function askPublishPassword(username,url){
+  return new Promise(resolve=>{
+    const box=document.createElement('dialog');
+    box.innerHTML='<h2>正式发布到 Nervos Talk</h2><p class="muted"></p><form><label>Talk 密码（仅本次使用）<input type="password" autocomplete="off" required></label><div class="actions"><button type="submit" class="primary">确认公开发布</button><a target="_blank" rel="noopener noreferrer">在原帖手动发布 ↗</a><button type="button">取消</button></div></form>';
+    box.querySelector('p').textContent='将以 '+username+' 的身份发布当前草稿。若需双因素验证，可打开原帖手动发布。';
+    const password=box.querySelector('input');
+    box.querySelector('a').href=url;
+    const finish=value=>{password.value='';box.close();box.remove();resolve(value)};
+    box.querySelector('form').onsubmit=e=>{e.preventDefault();finish(password.value)};
+    box.querySelector('button[type=button]').onclick=()=>finish(null);
+    box.oncancel=e=>{e.preventDefault();finish(null)};
+    document.body.append(box);box.showModal();password.focus();
+  });
+}
+$("#publishDraft").onclick=async()=>{
+  const button=$("#publishDraft");
+  if(button.disabled)return;
+  button.disabled=true;
+  try{
+    const url=new URL($("#draftUrl").value.trim());
+    const match=url.pathname.match(/^\/t\/(?:[^/]*[^0-9/][^/]*\/)?([1-9][0-9]*)(?:\/[0-9]+)?\/?$/);
+    if(url.origin!=='https://talk.nervos.org'||url.username||url.password||!match)throw new Error('请填写有效的 Nervos Talk 帖子 URL');
+    const raw=$("#draftOutput").value;
+    if(!raw.trim())throw new Error('请先准备非空草稿');
+    const username=state.session.forum_username;
+    if(!username)throw new Error('请先绑定本人 Talk 用户名；团队模式请联系管理员');
+    requirePasswordTransport();
+    const password=await askPublishPassword(username,'https://talk.nervos.org/t/'+match[1]);
+    if(!password)return;
+    const result=await api('/api/forum/post',{method:'POST',body:JSON.stringify({topic_id:match[1],raw,password,confirmation:'正式发布'})},false);
+    toast(`已发布为第 ${result.post_number} 楼`);
+  }catch(e){toast(e.message,true)}finally{button.disabled=false}
+};
 $("#draftProject").onchange=e=>{if(e.target.value)$("#draftUrl").value=e.target.value};
 $("#draftUrl").onchange=e=>{const v=e.target.value;const sel=$("#draftProject");const opt=[...sel.options].find(o=>o.value===v);if(opt)sel.value=v;else sel.value=''};
 $("#loadResolution").onclick=loadResolutionPreview;$("#refreshDraftPage").onclick=async()=>{await load();toast('起草页已刷新')};
@@ -212,7 +251,7 @@ $("#summarizeMeeting").onclick=async()=>{try{const p=meetingPayload(),v=await ap
 $("#addResolution").onclick=addResolutionRow;
 $("#importMeetings").onclick=()=>$("#meetingFile").click();$("#meetingFile").onchange=async e=>{try{const value=JSON.parse(await e.target.files[0].text());if(!Array.isArray(value))throw new Error('JSON 顶层必须是会议数组');await api('/api/legacy/section',{method:'POST',body:JSON.stringify({section:'meetings',value})});await load();toast(`已导入 ${value.length} 场会议`)}catch(err){toast(err.message,true)}finally{e.target.value=''}};
 $("#exportMeetings").onclick=()=>{const blob=new Blob([JSON.stringify(state.meetings||[],null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='spark-meetings.json';a.click();URL.revokeObjectURL(a.href)};
-$("#importMeetingText").onclick=()=>{$("#importMeetingDialog").showModal()};
+/* importMeetingText 通过 commandfor/command="show-modal" 声明式打开对话框 */
 $("#parseRegex").onclick=()=>parseMeetingText('regex');$("#parseAi").onclick=()=>parseMeetingText('ai');
 $("#confirmImportMeeting").onclick=confirmImportMeeting;
 $("#exportMeetingMd").onclick=exportMeetingMd;
@@ -224,7 +263,217 @@ $("#scanChainMain").onclick=scanChainMain;$("#scanChainMultisig").onclick=scanCh
 {const ns=$("#notionSources");if(ns){ns.addEventListener('mouseover',e=>{const row=e.target.closest('.compact-row');if(row)locatePreviewRow(row)});ns.addEventListener('mouseout',e=>{if(!ns.contains(e.relatedTarget))clearRowHighlight()})}}
 $("#saveSettings").onclick=async()=>{try{const v=await api('/api/settings/ai',{method:'POST',body:JSON.stringify({provider:$("#settingProvider").value,model:$("#settingModel").value,api_key:$("#settingKey").value})});$("#settingKey").value='';await load();toast(v)}catch(e){toast(e.message,true)}};
 $("#saveLocalSettings").onclick=async()=>{try{const v=await api('/api/settings/local',{method:'POST',body:JSON.stringify({auto_notion:$("#settingAutoNotion").checked,team_mode:$("#settingTeamMode").checked})});await load();$("#localSettingsHint").textContent=v.restart_required?'团队模式已保存，重启本地服务后生效；Notion 自动写入已立即生效':'Notion 自动写入开关已立即生效';toast('开关已保存'+(v.restart_required?'（团队模式需重启服务生效）':''))}catch(e){toast(e.message,true)}};
+$("#saveForumSettings").onclick=async()=>{try{if(state.config?.team_mode)throw new Error('团队模式请联系管理员绑定论坛账号');const username=$("#settingTalkUsername").value.trim();if(!username)throw new Error('请填写 Talk 用户名');await api('/api/settings/forum',{method:'POST',body:JSON.stringify({talk_username:username})});await load();toast('Talk 用户名已保存')}catch(e){toast(e.message,true)}};
 document.addEventListener('click',e=>{const b=e.target.closest('.use-draft');if(b){switchView('draft');$("#draftUrl").value=b.dataset.url;$("#draftProject").value=b.dataset.url}const d=e.target.closest('.dismiss-job');if(d){if(!confirm('确定忽略该同步作业？将不再显示。'))return;api('/api/jobs/dismiss',{method:'POST',body:JSON.stringify({key:d.dataset.key})}).then(()=>load()).then(()=>toast('已忽略')).catch(err=>toast(err.message,true));return}const j=e.target.closest('.load-job');if(j){const job=(state.jobs||[]).find(x=>x.idempotency_key===j.dataset.key);if(job?.payload){switchView('notion');$("#workflow").value=job.workflow==='in_progress'?'new-project':job.workflow==='weekly'?'weekly':'completion';$("#payload").value=JSON.stringify(job.payload,null,2);toast('已载入作业载荷。请核对冲突字段后再执行。')}}});
 $("#manualProject").onclick=async()=>{const url=prompt('输入 Nervos Talk 项目帖子 URL');if(!url)return;const bucket=prompt('输入分组：submitted / pending / in_progress / rejection / completion / closure','in_progress');if(!bucket)return;try{await api('/api/board/manual',{method:'POST',body:JSON.stringify({url,bucket})});await load();boardBucket=bucket;renderBoardTabs();renderBoard();toast('项目已加入看板并保存分组规则')}catch(e){toast(e.message,true)}};
 $("#wlTarget").onchange=updateWlBar;$("#wlAdd").onclick=addWhitelist;
 load().then(loadNotionPreview).catch(e=>toast(e.message,true));
+
+/* ===== 草稿审阅队列：AI 起草自动入队，时间线/纪要页进入，左右对照连续审阅 ===== */
+async function loadReviewBadge(){try{const v=await api('/api/drafts?status=pending');const n=(v.drafts||[]).length;const nb=$('#reviewNavBadge');if(nb){nb.hidden=!n;nb.textContent=n>99?'99+':String(n)}}catch(e){}}
+let reviewList=[],reviewIndex=0,reviewDocument=null,reviewTicket=0,reviewBusy=false,reviewSelection=null;
+let reviewFullText='',lastReviewDraft=null,reviewMode='draft',proposalRequested=false;
+const reviewEditor=()=>$('#reviewDraft');
+const reviewDirty=()=>!!reviewDocument&&reviewEditor().value!==reviewDocument.draft_content;
+const reviewStatus=text=>{$('#reviewEditStatus').textContent=text};
+function reviewControls(){
+  const active=!!reviewDocument&&!reviewBusy;
+  reviewEditor().disabled=!active;
+  $('#reviewSave').disabled=!active||!reviewDirty();
+  $('#reviewMark').disabled=!active;
+  $('#reviewCommentAdd').disabled=!active||reviewEditor().selectionStart===reviewEditor().selectionEnd;
+  $('#reviewPrev').disabled=reviewBusy||reviewIndex<=0;
+  $('#reviewNext').disabled=reviewBusy||reviewIndex>=reviewList.length-1;
+}
+function mayLeaveReview(){return !reviewBusy&&!$('#reviewCommentDialog').open&&(!reviewDirty()||confirm('草稿还有未保存的修改。放弃修改并离开？'))}
+function selectReviewQuote(editor,start,end){
+  editor.focus();
+  editor.setSelectionRange(start,end);
+  const mirror=document.createElement('div'),marker=document.createElement('span'),css=getComputedStyle(editor);
+  mirror.className='review-quote-mirror';mirror.style.width=editor.clientWidth+'px';
+  for(const prop of ['font','lineHeight','letterSpacing','padding','tabSize','wordBreak','overflowWrap']){
+    mirror.style[prop]=css[prop];
+  }
+  const before=editor.value.slice(0,start);
+  marker.textContent='\u200b';mirror.append(before,marker);document.body.append(mirror);
+  const top=marker.offsetTop;
+  mirror.remove();
+  if(top<editor.scrollTop||top>editor.scrollTop+editor.clientHeight-30)editor.scrollTop=Math.max(0,top-40);
+}
+function renderReviewComments(){
+  const comments=reviewDocument?.comments||[],list=$('#reviewComments');
+  $('#reviewCommentsToggle').textContent=`批注（${comments.length}）`;
+  list.replaceChildren();
+  if(!comments.length){list.textContent='选中草稿中的文字，即可添加批注。';return}
+  for(const item of comments){
+    const row=document.createElement('article');row.className='review-comment';
+    const quote=document.createElement('button');quote.type='button';
+    quote.textContent=item.quote;quote.disabled=item.start_offset===null;
+    quote.title=item.start_offset===null?'原文已改动':'定位到正文';
+    quote.onclick=()=>{
+      if(reviewDirty()){reviewStatus('请先保存当前修改，再定位批注。');return}
+      const editor=reviewEditor(),points=Array.from(editor.value);
+      selectReviewQuote(editor,points.slice(0,item.start_offset).join('').length,points.slice(0,item.end_offset).join('').length);
+      reviewControls();
+    };
+    const meta=document.createElement('small');
+    meta.textContent=`${item.author} · ${fmtDate(item.created_at)}${item.start_offset===null?' · 原文已改动':''}`;
+    const body=document.createElement('p');body.textContent=item.body;
+    row.append(quote,body,meta);list.append(row);
+  }
+}
+function applyReviewDocument(value){
+  reviewDocument=value;
+  if(reviewEditor().value!==value.draft_content)reviewEditor().value=value.draft_content;
+  renderReviewComments();
+}
+async function openReviewQueue(){
+  if(!mayLeaveReview())return;
+  try{
+    const v=await api('/api/drafts?status=pending');
+    if(!v.drafts.length)return toast('没有待审的草稿。AI 起草成功后会自动进入队列。');
+    reviewList=v.drafts.slice();reviewIndex=0;
+    $('#reviewOverlay').hidden=false;setReviewMode('draft');await showReviewItem();
+  }catch(e){toast(e.message,true)}
+}
+async function loadReviewProposal(){
+  const d=reviewList[reviewIndex],ticket=reviewTicket,view=$('#reviewProposal');
+  if(!reviewDocument||!d||proposalRequested||!['all','proposal'].includes(reviewMode))return;
+  proposalRequested=true;view.textContent='正在加载提案原文…';
+  try{
+    const v=await api(`/api/drafts/item?id=${d.id}`);
+    if(ticket!==reviewTicket)return;
+    view.textContent=v.proposal?.posts?.length?v.proposal.posts.map(post=>`【#${post.post_number} · ${post.username} · ${(post.created_at||'').slice(0,10)}】\n${post.text}`).join('\n\n'):`（提案原文加载失败：${v.proposal_error||'未知错误'}）`;
+  }catch(e){if(ticket===reviewTicket){proposalRequested=false;view.textContent='加载失败：'+e.message}}
+}
+async function showReviewItem(){
+  const ticket=++reviewTicket;
+  reviewDocument=null;proposalRequested=false;
+  reviewEditor().value='';$('#reviewProposal').textContent='';
+  renderReviewComments();reviewControls();
+  if(!reviewList.length){$('#reviewOverlay').hidden=true;toast('全部草稿已审阅完毕');loadReviewBadge();return}
+  reviewIndex=Math.max(0,Math.min(reviewIndex,reviewList.length-1));
+  const d=reviewList[reviewIndex];
+  $('#reviewCounter').textContent=`${reviewIndex+1} / ${reviewList.length}`;
+  $('#reviewTitle').textContent=`${d.title||'(无标题)'} · 模板：${d.template||'无'}`;
+  $('#reviewOpenOriginal').href=/^\d+$/.test(d.topic_id)?`https://talk.nervos.org/t/${d.topic_id}`:'#';
+  reviewStatus('正在加载草稿…');reviewControls();
+  renderReviewMeetings(d);
+  try{
+    const v=await api(`/api/drafts/item?id=${d.id}&proposal=0`);
+    if(ticket!==reviewTicket)return;
+    applyReviewDocument(v);reviewStatus('');loadReviewProposal();
+  }catch(e){if(ticket===reviewTicket)reviewStatus('加载失败：'+e.message)}
+  finally{if(ticket===reviewTicket)reviewControls()}
+}
+async function persistReviewEdit(){
+  if(!reviewDirty())return;
+  const draft=reviewDocument;
+  applyReviewDocument(await api('/api/drafts/edit',{method:'POST',body:JSON.stringify({id:draft.id,revision:draft.revision,content:reviewEditor().value})}));
+  reviewStatus('修改已保存');
+}
+async function saveReviewEdit(){
+  if(!reviewDirty()||reviewBusy)return;
+  reviewBusy=true;reviewControls();
+  try{await persistReviewEdit()}catch(e){reviewStatus(e.message)}
+  finally{reviewBusy=false;reviewControls()}
+}
+$('#reviewSave').onclick=saveReviewEdit;
+reviewEditor().addEventListener('input',()=>{reviewStatus(reviewDirty()?'有未保存的修改':'');reviewControls()});
+reviewEditor().addEventListener('select',reviewControls);
+document.addEventListener('selectionchange',()=>{if(document.activeElement===reviewEditor())reviewControls()});
+$('#reviewCommentsToggle').onclick=()=>{
+  const pane=$('#reviewCommentsPane');pane.hidden=!pane.hidden;
+  $('#reviewCommentsToggle').setAttribute('aria-expanded',String(!pane.hidden));
+};
+$('#reviewCommentAdd').onclick=()=>{
+  const editor=reviewEditor(),text=editor.value;
+  const start=editor.selectionStart,end=editor.selectionEnd,quote=text.slice(start,end);
+  if(!quote.trim())return reviewStatus('请先选中要批注的正文。');
+  if(Array.from(quote).length>4000)return reviewStatus('请选中不超过 4,000 字符的正文。');
+  reviewSelection={start:Array.from(text.slice(0,start)).length,end:Array.from(text.slice(0,end)).length};
+  $('#reviewCommentQuote').textContent=quote;
+  $('#reviewCommentText').value='';$('#reviewCommentError').textContent='';
+  $('#reviewCommentDialog').showModal();$('#reviewCommentText').focus();
+};
+$('#reviewCommentCancel').onclick=()=>$('#reviewCommentDialog').close();
+$('#reviewCommentDialog').oncancel=e=>{if(reviewBusy)e.preventDefault()};
+$('#reviewCommentForm').onsubmit=async event=>{
+  event.preventDefault();
+  const body=$('#reviewCommentText').value.trim(),submit=event.currentTarget.querySelector('[type=submit]');
+  if(!body||!reviewSelection||!reviewDocument||reviewBusy)return;
+  reviewBusy=true;submit.disabled=true;$('#reviewCommentCancel').disabled=true;reviewControls();
+  try{
+    await persistReviewEdit();
+    const d=reviewDocument;
+    applyReviewDocument(await api('/api/drafts/comment',{method:'POST',body:JSON.stringify({id:d.id,revision:d.revision,...reviewSelection,body})}));
+    $('#reviewCommentDialog').close();
+    if($('#reviewCommentsPane').hidden)$('#reviewCommentsToggle').click();
+    reviewStatus('批注已保存');
+  }catch(e){$('#reviewCommentError').textContent=e.message}
+  finally{reviewBusy=false;submit.disabled=false;$('#reviewCommentCancel').disabled=false;reviewControls()}
+};
+function setReviewMode(mode){reviewMode=mode;const show={all:{p:1,d:1,m:1},proposal:{p:1,d:1,m:0},meeting:{p:0,d:1,m:1},draft:{p:0,d:1,m:0}}[mode]||{p:1,d:1,m:1};const pp=$('#reviewPaneProposal'),pd=$('#reviewPaneDraft'),pm=$('#reviewPaneMeeting');if(pp)pp.hidden=!show.p;if(pd)pd.hidden=!show.d;if(pm)pm.hidden=!show.m;const panes=$('#reviewPanes');if(panes)panes.className=`review-panes mode-${mode}`;$$('#reviewModeGroup [data-review-mode]').forEach(b=>b.classList.toggle('active',b.dataset.reviewMode===mode));loadReviewProposal()}
+$$('#reviewModeGroup [data-review-mode]').forEach(b=>b.onclick=()=>setReviewMode(b.dataset.reviewMode));
+function renderReviewMeetings(d){lastReviewDraft=d;const sel=$('#reviewMeetingSel'),box=$('#reviewMeeting');if(!sel||!box)return;const ms=(state.meetings||[]).filter(m=>(m.transcript||'').trim());sel.innerHTML='';if(!ms.length){reviewFullText='';box.textContent='（暂无任何会议的转写文本；在纪要页完成转写并保存后，即可在此对照审阅）';return}
+ms.forEach((m,i)=>{const o=document.createElement('option');o.value=i;o.textContent=`${m.date||''} · ${m.title||'未命名'}${(m.talk_topic_url||'').includes(String(d.topic_id))?'（关联本帖）':''}`;sel.appendChild(o)});
+const hit=ms.findIndex(m=>(m.talk_topic_url||'').includes(String(d.topic_id)));sel.value=String(hit>=0?hit:0);const show=()=>{const m=ms[+sel.value];reviewFullText=(m.transcript||'').trim();box.classList.remove('muted');applyReviewFilter()};sel.onchange=show;show()}
+function applyReviewFilter(){const box=$('#reviewMeeting'),cnt=$('#reviewFilterCount');if(!box||!reviewFullText)return;const paras=reviewFullText.split(/\n\n+/);const on=$('#reviewFilterToggle')?$('#reviewFilterToggle').checked!==false:true;if(!on){box.textContent=reviewFullText;if(cnt)cnt.textContent=`共 ${paras.length} 段`;return}
+const raw=($('#reviewFilterKw')&&$('#reviewFilterKw').value.trim())||String((lastReviewDraft||{}).title||'');const kws=raw.split(/[\s,，、|·]+/).filter(w=>w.trim().length>=2).map(w=>w.toLowerCase());const hit=kws.length?paras.filter(p=>kws.some(k=>p.toLowerCase().includes(k))):paras;box.textContent=hit.length?hit.join('\n\n'):`（没有段落匹配「${raw||'项目名'}」；可取消「只看本项目」或修改关键词）`;if(cnt)cnt.textContent=`显示 ${hit.length} / ${paras.length} 段`}
+$('#reviewFilterToggle')&&($('#reviewFilterToggle').onchange=applyReviewFilter);$('#reviewFilterKw')&&($('#reviewFilterKw').oninput=applyReviewFilter);
+function renderManualProjectOptions(){const sel=$('#manualDraftProject');if(!sel)return;const cur=sel.value;sel.innerHTML='<option value="">手动输入 URL</option>'+draftProjects().map(p=>`<option value="${esc(p.url)}">${esc(p.labels.map(x=>`[${x}]`).join(' '))} #${esc(String(p.id))} ${esc(p.title)}</option>`).join('');if(cur)sel.value=cur}
+$('#reviewAddManual')&&($('#reviewAddManual').onclick=()=>{renderManualProjectOptions();$('#manualDraftDialog').showModal()});
+$('#manualDraftProject')&&($('#manualDraftProject').onchange=()=>{const v=$('#manualDraftProject').value;if(v)$('#manualDraftUrl').value=v});
+$('#manualDraftCancel')&&($('#manualDraftCancel').onclick=()=>$('#manualDraftDialog').close());
+$('#manualDraftSave')&&($('#manualDraftSave').onclick=async()=>{if(!mayLeaveReview())return;try{const url=$('#manualDraftUrl').value.trim(),content=$('#manualDraftContent').value.trim();if(!url||!content)return toast('请填写帖子链接和草稿内容',true);await api('/api/drafts',{method:'POST',body:JSON.stringify({topic_url:url,title:$('#manualDraftTitle').value.trim(),content})});$('#manualDraftDialog').close();$('#manualDraftUrl').value='';$('#manualDraftTitle').value='';$('#manualDraftProject').value='';$('#manualDraftContent').value='';toast('已加入审阅队列');const v=await api('/api/drafts?status=pending');reviewList=v.drafts.slice();if(reviewIndex>=reviewList.length)reviewIndex=reviewList.length-1;if($('#reviewOverlay').hidden){reviewIndex=0;$('#reviewOverlay').hidden=false;setReviewMode('draft')}showReviewItem();loadReviewBadge()}catch(e){toast(e.message,true)}});
+async function markReviewed(){
+  if(!reviewDocument||reviewBusy)return;
+  reviewBusy=true;reviewControls();
+  try{
+    await persistReviewEdit();
+    const d=reviewDocument;
+    await api('/api/drafts/reviewed',{method:'POST',body:JSON.stringify({id:d.id,revision:d.revision})});
+    reviewList.splice(reviewIndex,1);loadReviewBadge();
+    await showReviewItem();
+  }catch(e){reviewStatus(e.message)}
+  finally{reviewBusy=false;reviewControls()}
+}
+function stepReview(delta){
+  const next=reviewIndex+delta;
+  if(next>=0&&next<reviewList.length&&mayLeaveReview()){reviewIndex=next;showReviewItem()}
+}
+function closeReview(){
+  if(!mayLeaveReview())return;
+  reviewDocument=null;reviewTicket++;$('#reviewOverlay').hidden=true;
+}
+$('#openReviewQueue')&&($('#openReviewQueue').onclick=openReviewQueue);$('#openReviewQueue2')&&($('#openReviewQueue2').onclick=openReviewQueue);
+$('#reviewPrev').onclick=()=>stepReview(-1);
+$('#reviewNext').onclick=()=>stepReview(1);
+$('#reviewMark').onclick=markReviewed;
+$('#reviewClose').onclick=closeReview;
+window.addEventListener('beforeunload',e=>{if(reviewDirty()||reviewBusy){e.preventDefault();e.returnValue=''}});
+document.addEventListener('keydown',e=>{
+  if($('#reviewOverlay').hidden||e.isComposing||$('#reviewCommentDialog').open||$('#manualDraftDialog').open)return;
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();saveReviewEdit();return}
+  if(e.key==='Escape'){closeReview();return}
+  if(e.target.closest?.('input,textarea,select,button,a,[contenteditable]'))return;
+  if(e.key==='ArrowLeft')stepReview(-1);
+  else if(e.key==='ArrowRight')stepReview(1);
+});
+
+/* ===== 本地录音转写：浏览器录音/上传音频 → faster-whisper 本地识别 ===== */
+let asrBlob=null,asrFileName='',asrMediaRecorder=null,asrStream=null,asrStartAt=0,asrTimerInt=null;
+async function loadAsrStatus(){const el=$('#asrStatus');if(!el)return;try{const v=await api('/api/transcribe/status');const btn=$('#asrInstallBtn');const tb=$('#asrTranscribeBtn');const db=$('#asrDiarizeInstallBtn');if(v.busy){const p=v.progress||{};const ptxt=p.percent!=null?` ${p.percent}%${p.note?' · '+p.note:''}`:'';el.textContent=`正在转写中${ptxt}…（关闭页面不会中断，完成后按钮自动恢复）`;if(tb){tb.disabled=true;tb.textContent=`转写中${ptxt}`}setTimeout(loadAsrStatus,p.percent!=null?4000:8000);return}if(tb&&tb.textContent==='转写中…'){tb.disabled=false;tb.textContent='转写'}if(v.installed){el.textContent='本地转写已就绪（faster-whisper，音频不出本机）';btn.textContent='重新安装';btn.disabled=false}else if(v.installing){el.textContent='正在安装本地转写环境，进度见项目目录 setup-asr.log…';btn.disabled=true;setTimeout(loadAsrStatus,5000)}else{el.textContent='本地转写未安装：点击右侧按钮安装（约 100MB 运行库；识别模型在首次转写时按所选档位自动下载）';btn.textContent='安装本地转写';btn.disabled=false}
+if(db){if(v.diarization_installing){db.textContent='安装中…（约 1GB，耐心等候）';db.disabled=true;setTimeout(loadAsrStatus,10000)}else if(v.diarization_installed){db.textContent='说话人分离已安装';db.disabled=true}else{db.textContent='安装说话人分离';db.disabled=false}}
+const dz=$('#asrDiarize');if(dz){dz.disabled=!v.diarization_installed;dz.title=v.hf_token_configured?'':'未配置 Hugging Face Token（设置页填写）'}
+if(el.textContent.includes('就绪')&&v.diarization_installed){el.textContent+='；说话人分离'+(v.hf_token_configured?'已就绪（WhisperX + pyannote）':'已安装但缺 HF Token')}}catch(e){el.textContent='状态检查失败：'+e.message}}
+$('#asrInstallBtn').onclick=async()=>{try{const v=await api('/api/transcribe/install',{method:'POST',body:'{}'});toast(v.installed?'本地转写已就绪':'安装已启动，完成后此处自动刷新');loadAsrStatus()}catch(e){toast(e.message,true)}};
+$('#asrDiarizeInstallBtn')&&($('#asrDiarizeInstallBtn').onclick=async()=>{try{const v=await api('/api/transcribe/install',{method:'POST',body:JSON.stringify({component:'diarization'})});toast(v.installed?'说话人分离已就绪':'安装已启动（约 1GB，进度见项目目录 setup-asr.log），完成后此处自动刷新');loadAsrStatus()}catch(e){toast(e.message,true)}});
+$('#saveHfToken')&&($('#saveHfToken').onclick=async()=>{try{const v=await api('/api/settings/forum',{method:'POST',body:JSON.stringify({talk_username:(state.forum_settings||{}).talk_username||'',hf_token:$('#settingHfToken').value})});$('#settingHfToken').value='';state.forum_settings=v;renderForumSettings();loadAsrStatus();toast('HF Token 已保存')}catch(e){toast(e.message,true)}});
+$('#asrRecordBtn').onclick=async()=>{if(asrMediaRecorder&&asrMediaRecorder.state==='recording'){asrMediaRecorder.stop();return}try{asrStream=await navigator.mediaDevices.getUserMedia({audio:true});asrMediaRecorder=new MediaRecorder(asrStream);const chunks=[];asrMediaRecorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};asrMediaRecorder.onstop=()=>{asrBlob=new Blob(chunks,{type:asrMediaRecorder.mimeType||'audio/webm'});asrFileName='recording.webm';$('#asrFileName').textContent=`已录音（${(asrBlob.size/1048576).toFixed(1)} MB）`;$('#asrRecordBtn').textContent='⏺ 开始录音';clearInterval(asrTimerInt);$('#asrTimer').textContent='';asrStream.getTracks().forEach(t=>t.stop())};asrStartAt=Date.now();asrMediaRecorder.start(1000);$('#asrRecordBtn').textContent='⏹ 停止录音';asrTimerInt=setInterval(()=>{$('#asrTimer').textContent=Math.round((Date.now()-asrStartAt)/1000)+'s'},1000)}catch(e){toast('无法访问麦克风：'+e.message,true)}};
+$('#asrUploadBtn').onclick=()=>$('#asrFile').click();
+$('#asrFile').onchange=e=>{const f=e.target.files[0];if(!f)return;asrBlob=f;asrFileName=f.name;$('#asrFileName').textContent=f.name;$('#asrTimer').textContent=(f.size/1048576).toFixed(1)+' MB'};
+$('#asrGlossary').value=localStorage.getItem('asrGlossary')||'';
+$('#asrGlossary').oninput=e=>localStorage.setItem('asrGlossary',e.target.value);
+$('#asrTranscribeBtn').onclick=async()=>{if(!asrBlob)return toast('请先录音或选择音频文件',true);const btn=$('#asrTranscribeBtn');const diarize=$('#asrDiarize')&&$('#asrDiarize').checked;try{btn.disabled=true;btn.textContent=diarize?'转写中…（含说话人分离，较慢）':'转写中…（首次使用需下载模型，请耐心等待）';const resp=await fetch(`/api/transcribe?filename=${encodeURIComponent(asrFileName||'recording.webm')}&model=${encodeURIComponent($('#asrModel').value)}&glossary=${encodeURIComponent($('#asrGlossary').value)}${diarize?'&diarize=1':''}`,{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/octet-stream'},body:asrBlob});const v=await resp.json().catch(()=>({}));if(!resp.ok)throw new Error(v.error||`HTTP ${resp.status}`);const ta=$('#meetingTranscript');ta.value=(ta.value?ta.value+'\n\n':'')+(v.text||'');toast(`转写完成：${v.duration}s 音频，耗时 ${v.elapsed}s${v.diarized?'（含说话人分离）':''}，已按段落写入「转写文本」`)}catch(e){toast(e.message,true)}finally{btn.disabled=false;btn.textContent='转写'}};
+$('#asrPolishBtn').onclick=async()=>{const ta=$('#meetingTranscript');const text=(ta.value||'').trim();if(!text)return toast('请先完成转写，「转写文本」为空',true);if(!confirm('AI 整理将按发言人分段并修正错字，直接替换当前「转写文本」内容。继续？'))return;const btn=$('#asrPolishBtn');try{btn.disabled=true;btn.textContent='整理中…';const v=await api('/api/ai/transcript-polish',{method:'POST',body:JSON.stringify({text,glossary:$('#asrGlossary').value})});ta.value=v.content;toast('AI 整理完成，已按发言人分段替换转写文本')}catch(e){toast(e.message,true)}finally{btn.disabled=false;btn.textContent='✨ AI 整理'}};

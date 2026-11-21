@@ -19,14 +19,14 @@ from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .config import AUTO_NOTION, BUILD_VERSION, HOST, NOTION_TOKEN, PORT, ROOT, TEAM_MODE, load_workspace_config, load_env
+from .config import AUTO_NOTION, BUILD_VERSION, DISPLAY_HOST, HOST, NOTION_TOKEN, PORT, ROOT, TEAM_MODE, load_workspace_config, load_env
 from . import chain
 from .forum import (ai_json, extract_completion, extract_new_project, extract_weekly_update,
-                    fetch_topic, normalized_posts, post_as_user)
+                    fetch_topic, normalized_posts, post_with_password, verify_talk_credentials)
 from . import legacy, project_tracking
 from .notion import NotionClient, NotionConflict, NotionError
 from . import notion_preview
-from .storage import Store, utcnow
+from .storage import ReviewConflict, Store, utcnow
 from .workflows import NotionAutomation, WorkflowInputError, payload_from_json, REQUIRED_NEW_PROJECT
 
 
@@ -117,6 +117,267 @@ CLIENT_EMPTY_SINCE: float | None = None
 ACTIVE_REQUESTS = 0
 CLIENT_STALE_AFTER = 90.0
 AUTO_SHUTDOWN_EMPTY_GRACE = 8.0
+
+
+def _forum_settings_payload() -> dict:
+    return {"talk_username": legacy.forum_binding(), "talk_password_saved": bool(legacy.forum_password()),
+            "hf_token_configured": bool(_hf_token())}
+
+
+
+def _committee_talk_name(value: str | None) -> str:
+    return (value or "").strip().removeprefix("@").casefold()
+
+
+def _ensure_talk_user(forum_username: str) -> dict | None:
+    """Provision a verified committee member without granting publishing privileges."""
+    with STORE.transaction() as conn:
+        bound = conn.execute("SELECT * FROM users WHERE lower(forum_username)=?", (forum_username,)).fetchall()
+        if bound:
+            return dict(bound[0]) if len(bound) == 1 and bound[0]["enabled"] else None
+        existing = conn.execute("SELECT * FROM users WHERE lower(username)=?", (forum_username,)).fetchall()
+        if existing:
+            # Never attach a Talk identity to an unbound privileged local account by name alone.
+            if len(existing) != 1 or not existing[0]["enabled"] or existing[0]["forum_username"] or existing[0]["role"] != "viewer":
+                return None
+            row = dict(existing[0])
+            conn.execute("UPDATE users SET forum_username=? WHERE username=?", (forum_username, row["username"]))
+            row["forum_username"] = forum_username
+            return row
+        conn.execute("INSERT INTO users VALUES(?,?,?,?,?,?)",
+                     (forum_username, STORE.hash_password(secrets.token_urlsafe(24)),
+                      "viewer", forum_username, 1, utcnow()))
+    STORE.audit(forum_username, "talk_auto_provision", forum_username, {"role": "viewer"})
+    return {"username": forum_username, "forum_username": forum_username, "role": "viewer"}
+
+
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+
+
+def _login_throttled(ip: str) -> bool:
+    """登录限流：每 IP 每分钟最多 8 次尝试（论坛密码校验会请求 Nervos Talk）。"""
+    now = time.monotonic()
+    window = [t for t in _LOGIN_ATTEMPTS.get(ip, []) if now - t < 60]
+    throttled = len(window) >= 8
+    if not throttled:
+        window.append(now)
+    _LOGIN_ATTEMPTS[ip] = window
+    if len(_LOGIN_ATTEMPTS) > 5000:
+        _LOGIN_ATTEMPTS.clear()
+    return throttled
+
+
+def _resolve_login_user(uname: str, pwd: str) -> dict | None:
+    """Require both committee membership and fresh verification of that exact Talk identity."""
+    name = _committee_talk_name(uname)
+    if name not in legacy.COMMITTEE_MEMBERS or not pwd:
+        return None
+    disabled = STORE.query("SELECT 1 FROM users WHERE enabled=0 AND (lower(username)=? OR lower(forum_username)=?)",
+                           (name, name))
+    if disabled or not verify_talk_credentials(name, pwd):
+        return None
+    return _ensure_talk_user(name)
+
+
+def _team_token_hash(token: str) -> str:
+    # Previous sessions may have been issued for non-committee or local-password logins.
+    return hashlib.sha256(("talk-committee-v1:" + token).encode()).hexdigest()
+
+
+def _topic_text_cached(topic_id: str) -> dict:
+    from .config import CACHE_PATH
+    try:
+        cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    bucket = cache.setdefault("topic_text_cache", {})
+    entry = bucket.get(str(topic_id))
+    if entry and time.time() - entry.get("fetched_at", 0) < 3600:
+        return entry["value"]
+    value = legacy.topic_text(str(topic_id))
+    bucket[str(topic_id)] = {"fetched_at": time.time(), "value": value}
+    try:
+        CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+    return value
+
+
+def _cache_review_draft(plan: dict, content: str, analysis: str = "") -> int | None:
+    """AI 草稿生成成功后自动存入审阅队列；同一 topic+模板 覆盖旧草稿。"""
+    topic_id = str(plan.get("topic_id") or "")
+    content = (content or "").strip()
+    if not topic_id or not content:
+        return None
+    title = str((plan.get("post") or {}).get("title") or "")
+    url = str((plan.get("post") or {}).get("full_url") or f"https://talk.nervos.org/t/{topic_id}")
+    return STORE.save_review_draft(topic_id, title, url, str(plan.get("template_name") or ""),
+                                   content, analysis or "")
+
+
+ASR_VENV = ROOT / "asr_venv"
+ASR_PYTHON = ASR_VENV / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+TRANSCRIBE_SCRIPT = ROOT / "tools" / "transcribe.py"
+DIARIZE_SCRIPT = ROOT / "tools" / "diarize.py"
+ASR_LOG = ROOT / "setup-asr.log"
+_asr_busy = False
+_asr_installing = False
+_diarization_installing = False
+_asr_progress_file: Path | None = None  # 转写子进程的进度文件（diarize 模式）
+
+
+def _asr_progress() -> dict:
+    if not (_asr_busy and _asr_progress_file):
+        return {}
+    try:
+        raw = _asr_progress_file.read_text(encoding="utf-8", errors="replace")
+        percent, _, note = raw.partition("|")
+        return {"percent": int(percent), "note": note}
+    except (OSError, ValueError):
+        return {}
+
+
+def _hf_token() -> str:
+    env = load_env()
+    return (os.environ.get("SPARK_HF_TOKEN") or env.get("SPARK_HF_TOKEN") or "").strip()
+
+
+def _asr_env() -> dict:
+    """转写子进程环境：走 hf 镜像，禁用易在代理下卡死的 Xet 协议，加下载超时。"""
+    env = dict(os.environ)
+    env["HF_ENDPOINT"] = "https://hf-mirror.com"
+    env["HF_HUB_DISABLE_XET"] = "1"
+    env["HF_HUB_DOWNLOAD_TIMEOUT"] = "30"
+    env["HF_HUB_ETAG_TIMEOUT"] = "30"
+    return env
+
+
+def _no_window_flags() -> int:
+    import subprocess
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def _asr_installed() -> bool:
+    site = ASR_VENV / "Lib" / "site-packages" if os.name == "nt" else ASR_VENV / "lib"
+    if not ASR_PYTHON.exists() or not site.exists():
+        return False
+    return any(site.glob("faster_whisper*")) or any(site.glob("faster-whisper*"))
+
+
+def _asr_log_tail(limit: int = 3000) -> str:
+    try:
+        return ASR_LOG.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
+
+
+def _diarization_installed() -> bool:
+    site = ASR_VENV / "Lib" / "site-packages" if os.name == "nt" else ASR_VENV / "lib"
+    if not ASR_PYTHON.exists() or not site.exists():
+        return False
+    return any(site.glob("whisperx*"))
+
+
+def _diarize_env() -> dict:
+    """说话人分离子进程环境：pyannote 门禁模型必须直连 huggingface.co
+    （镜像无法携带 token 下载门禁模型），因此不用 HF_ENDPOINT 镜像。"""
+    env = dict(os.environ)
+    env.pop("HF_ENDPOINT", None)
+    env["HF_HUB_DISABLE_XET"] = "1"
+    env["HF_HUB_DOWNLOAD_TIMEOUT"] = "60"
+    env["HF_HUB_ETAG_TIMEOUT"] = "60"
+    token = _hf_token()
+    if token:
+        env["HF_TOKEN"] = token
+        env["HUGGING_FACE_HUB_TOKEN"] = token
+    return env
+
+
+def _install_diarization() -> None:
+    global _diarization_installing
+    _diarization_installing = True
+
+    def log(message: str) -> None:
+        with ASR_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{dt.datetime.now().isoformat(timespec='seconds')}] {message}\n")
+
+    try:
+        import subprocess
+        log("开始安装说话人分离组件（torch CPU + WhisperX，约 1GB，耐心等候）")
+        steps = [
+            ("安装 torch/torchaudio CPU 版", [str(ASR_PYTHON), "-m", "pip", "install",
+             "--index-url", "https://download.pytorch.org/whl/cpu", "torch", "torchaudio"]),
+            ("安装 WhisperX（官方源）", [str(ASR_PYTHON), "-m", "pip", "install",
+             "-i", "https://pypi.org/simple", "git+https://github.com/m-bain/whisperX.git"]),
+            ("对齐 torchaudio 版本（与 torch 匹配）", [str(ASR_PYTHON), "-m", "pip",
+             "install", "--index-url", "https://download.pytorch.org/whl/cpu",
+             "torchaudio==2.8.0"]),
+            ("固定 av==12.3.0（与 faster-whisper 1.2.1 兼容）", [str(ASR_PYTHON), "-m",
+             "pip", "install", "-i", "https://pypi.org/simple", "av==12.3.0"]),
+        ]
+        for name, command in steps:
+            log(f"步骤：{name}")
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    env=_asr_env(), creationflags=_no_window_flags())
+            log(result.stdout[-2500:])
+            if result.returncode != 0:
+                log(f"步骤失败 returncode={result.returncode}: {result.stderr[-2500:]}")
+                return
+        nltk_env = dict(_asr_env())
+        nltk_env["NLTK_ALLOW_PROXIED_URLOPEN"] = "1"
+        log("步骤：下载 NLTK punkt_tab 数据")
+        result = subprocess.run([str(ASR_PYTHON), "-c",
+                                 "import nltk,os;os.environ['NLTK_ALLOW_PROXIED_URLOPEN']='1';"
+                                 "raise SystemExit(0 if nltk.download('punkt_tab') else 1)"],
+                                capture_output=True, text=True, env=nltk_env,
+                                creationflags=_no_window_flags())
+        log(result.stdout[-1500:])
+        if result.returncode != 0:
+            log(f"步骤失败 returncode={result.returncode}: {result.stderr[-1500:]}")
+            return
+        log("说话人分离组件安装完成；还需在设置页配置 Hugging Face Token "
+            "并在 HF 网站接受 pyannote 模型协议")
+    except Exception as exc:
+        log(f"安装异常: {exc}")
+    finally:
+        _diarization_installing = False
+
+
+def _install_asr() -> None:
+    global _asr_installing
+    _asr_installing = True
+
+    def log(message: str) -> None:
+        with ASR_LOG.open("a", encoding="utf-8") as handle:
+            handle.write(f"[{dt.datetime.now().isoformat(timespec='seconds')}] {message}\n")
+
+    try:
+        log("开始安装本地转写环境")
+        import subprocess
+        import sys
+        if not ASR_VENV.exists():
+            log("创建虚拟环境 asr_venv")
+            result = subprocess.run([sys.executable, "-m", "venv", str(ASR_VENV)],
+                                    capture_output=True, text=True)
+            if result.returncode != 0:
+                log(f"venv 创建失败: {result.stderr[-2000:]}")
+                return
+        env = _asr_env()
+        log("pip 安装 faster-whisper（官方源）")
+        result = subprocess.run([str(ASR_PYTHON), "-m", "pip", "install", "--upgrade",
+                                 "-i", "https://pypi.org/simple",
+                                 "faster-whisper", "av==12.3.0"],
+                                capture_output=True, text=True, env=env,
+                                creationflags=_no_window_flags())
+        log(result.stdout[-3000:])
+        if result.returncode != 0:
+            log(f"安装失败 returncode={result.returncode}: {result.stderr[-3000:]}")
+        else:
+            log("安装完成，首次转写时会自动下载识别模型")
+    except Exception as exc:
+        log(f"安装异常: {exc}")
+    finally:
+        _asr_installing = False
 LAST_REFRESH_AT: float | None = None
 SCHEDULER_INTERVAL = 60.0
 SCHEDULER_MIN_GAP = 2 * 3600.0
@@ -238,6 +499,14 @@ def automation() -> NotionAutomation:
 
 def chain_rpc() -> chain.ChainRPC:
     return chain.ChainRPC()
+
+
+def _chain_notion() -> Any:
+    """链上检索的 Notion 依赖。未配置 Token 时返回 None：检索照常进行，
+    只是不与 Notion 表对账（全部报 missing / 多签无项目清单）。"""
+    if not NOTION_TOKEN:
+        return None
+    return automation().notion
 
 
 def _chain_limit(query: dict, default: int = 500, maximum: int = 2000) -> int:
@@ -408,7 +677,8 @@ def refresh_board(actor: str = "local-admin") -> dict:
     global LAST_REFRESH_AT
     if not REFRESH_LOCK.acquire(blocking=False):
         return {"status": "busy", "message": "已有刷新任务正在运行"}
-    result = {"new_projects": [], "weekly_updates": [], "transitions": [], "errors": []}
+    result = {"new_projects": [], "weekly_updates": [], "transitions": [], "errors": [],
+              "notion_configured": bool(NOTION_TOKEN), "auto_notion": bool(AUTO_NOTION)}
     try:
         board = tracker_module().fetch_nervos_talk_projects()
         board = legacy.apply_whitelist(board, legacy.load_data().get("board_whitelist", {}))
@@ -416,6 +686,12 @@ def refresh_board(actor: str = "local-admin") -> dict:
         if board.get("errors"):
             result["errors"].extend(board["errors"])
         classified = board.get("classified") or {}
+        scanned = sum(len(classified.get(k) or []) for k in
+                      ("submitted", "pending", "in_progress", "rejection", "completion", "closure"))
+        spark_group = classified.get("spark_program") or {}
+        if isinstance(spark_group, dict):
+            scanned += sum(len(v) for v in spark_group.values() if isinstance(v, list))
+        result["scanned"] = scanned
 
         # AI 两级分类（对齐桌面版）：proposal / non_proposal，并自动建【预审】【删除标签】任务
         try:
@@ -633,18 +909,48 @@ class Handler(BaseHTTPRequestHandler):
     def _session(self) -> dict | None:
         if not TEAM_MODE:
             return {"username": "local-admin", "role": "administrator", "csrf_token": LOCAL_CSRF,
-                    "forum_username": None}
+                    "forum_username": legacy.forum_binding()}
         token = self._cookies().get("spark_session")
         if not token:
             return None
-        token_hash = hashlib.sha256(token.value.encode()).hexdigest()
+        token_hash = _team_token_hash(token.value)
         rows = STORE.query("""SELECT s.username,s.csrf_token,s.expires_at,u.role,u.forum_username,u.enabled
             FROM sessions s JOIN users u USING(username) WHERE s.token_hash=?""", (token_hash,))
-        return rows[0] if rows and rows[0]["enabled"] and rows[0]["expires_at"] > utcnow() else None
+        if rows and rows[0]["enabled"] and rows[0]["expires_at"] > utcnow() and (
+                _committee_talk_name(rows[0]["forum_username"]) in legacy.COMMITTEE_MEMBERS):
+            return rows[0]
+        return None
 
     def _actor(self) -> str:
         session = self._session()
         return session["username"] if session else "anonymous"
+
+    def _password_transport(self) -> bool:
+        """Accept only direct local access or the explicitly configured private TLS proxy."""
+        origin = self.headers.get("Origin", "")
+        host = self.headers.get("Host", "")
+        local_peer = self.client_address[0] in ("127.0.0.1", "::1")
+        configured = (os.environ.get("SPARK_TEAM_HTTPS_ORIGIN") or
+                      load_env().get("SPARK_TEAM_HTTPS_ORIGIN", "")).rstrip("/")
+        if (local_peer and configured.startswith("https://") and origin == configured
+                and self.headers.get("X-Forwarded-Proto") == "https"):
+            return True
+        if (local_peer and re.fullmatch(r"(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?", host, re.I)
+                and not self.headers.get("X-Forwarded-Proto") and origin in ("", f"http://{host}")):
+            return False
+        raise PermissionError("请从本机地址或已配置的私有 HTTPS 入口访问，勿通过局域网 HTTP 输入密码")
+
+    def _login_response(self, username: str, secure: bool = False) -> None:
+        token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        token_hash = _team_token_hash(token)
+        expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=12)).isoformat()
+        with STORE.transaction() as conn:
+            conn.execute("INSERT INTO sessions VALUES(?,?,?,?,?)",
+                         (token_hash, username, csrf, expires, utcnow()))
+        body = json.dumps({"ok": True, "csrf_token": csrf}).encode("utf-8")
+        self._send(200, body, "application/json; charset=utf-8",
+                   {"Set-Cookie": f"spark_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"
+                                  + ("; Secure" if secure else "")})
 
     def _send(self, status: int, body: bytes, content_type: str,
               extra_headers: dict[str, str] | None = None) -> None:
@@ -854,7 +1160,8 @@ class Handler(BaseHTTPRequestHandler):
             value["timeline"] = legacy.timeline(value.get("board") or {})
             value["project_tracking"] = project_tracking.load()
             value["session"] = {"username": session["username"], "role": session["role"],
-                                "csrf_token": session["csrf_token"]}
+                                "csrf_token": session["csrf_token"],
+                                "forum_username": session.get("forum_username")}
             value["config"] = {"version": BUILD_VERSION, "team_mode": TEAM_MODE, "notion_configured": bool(NOTION_TOKEN),
                                "auto_notion": AUTO_NOTION}
             self.json(200, value)
@@ -928,8 +1235,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 limit = _chain_limit(query)
                 resume = (query.get("resume") or ["1"])[0].lower() not in {"0", "false", "no"}
-                result = chain.scan_main(automation().notion, WORKSPACE, chain_rpc(),
+                result = chain.scan_main(_chain_notion(), WORKSPACE, chain_rpc(),
                                          limit=limit, resume=resume)
+                if not NOTION_TOKEN:
+                    result["notice"] = "未配置 Notion Token：以下为链上全量结果，全部按未入库处理"
                 result.pop("known_multisig", None)
                 result["updated_at"] = chain.cached_main().get("updated_at")
                 self.json(200, result)
@@ -946,9 +1255,17 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(200, chain.cached_multisig())
                     return
                 resume = (query.get("resume") or ["1"])[0].lower() not in {"0", "false", "no"}
-                result = chain.scan_multisig(automation().notion, WORKSPACE, chain_rpc(),
+                if not NOTION_TOKEN and not chain.local_project_wallets():
+                    self.json(200, {"multisig": [], "updated_at": None,
+                                    "notice": "未配置 Notion Token，且本地 project_wallets.json 没有已确认的多签清单：多签检索暂不可用；主钱包检索不受影响"})
+                    return
+                result = chain.scan_multisig(_chain_notion(), WORKSPACE, chain_rpc(),
                                              resume=resume)
-                self.json(200, {"multisig": result, "updated_at": chain.cached_multisig().get("updated_at")})
+                payload = {"multisig": result, "updated_at": chain.cached_multisig().get("updated_at")}
+                if not NOTION_TOKEN:
+                    payload["notice"] = "未配置 Notion Token：已按本地 project_wallets.json 清单检索；项目名与链上数据请以 Notion 项目列表为准"
+                self.json(200, payload)
+                return
             except chain.ChainError as exc:
                 self.json(502, {"error": f"链上检索失败: {exc}"})
             return
@@ -971,6 +1288,54 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(401, {"error": "请先登录"})
                 return
             self.json(200, {"events": STORE.audit_events()})
+            return
+        if path == "/api/settings/forum":
+            if not self._session():
+                self.json(401, {"error": "请先登录"})
+                return
+            self.json(200, _forum_settings_payload())
+            return
+        if path == "/api/drafts":
+            if not self._session():
+                self.json(401, {"error": "请先登录"})
+                return
+            query = urllib.parse.parse_qs(parsed.query)
+            status = (query.get("status") or [None])[0]
+            self.json(200, {"drafts": STORE.review_drafts(status or None)})
+            return
+        if path == "/api/drafts/item":
+            if not self._session():
+                self.json(401, {"error": "请先登录"})
+                return
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                draft = STORE.review_document(int((query.get("id") or ["0"])[0]))
+            except ValueError:
+                self.json(400, {"error": "无效的草稿编号"})
+                return
+            except KeyError:
+                self.json(404, {"error": "草稿不存在"})
+                return
+            if query.get("proposal") == ["0"]:
+                self.json(200, draft)
+                return
+            proposal, proposal_error = {}, ""
+            try:
+                proposal = _topic_text_cached(draft["topic_id"])
+            except Exception as exc:
+                proposal_error = str(exc)
+            self.json(200, {**draft, "proposal": proposal, "proposal_error": proposal_error})
+            return
+        if path == "/api/transcribe/status":
+            if not self._session():
+                self.json(401, {"error": "请先登录"})
+                return
+            self.json(200, {"installed": _asr_installed(), "installing": _asr_installing,
+                            "busy": _asr_busy, "log": _asr_log_tail(),
+                            "diarization_installed": _diarization_installed(),
+                            "diarization_installing": _diarization_installing,
+                            "hf_token_configured": bool(_hf_token()),
+                            "progress": _asr_progress()})
             return
         if path == "/api/meeting-items":
             if not self._session():
@@ -1035,19 +1400,19 @@ class Handler(BaseHTTPRequestHandler):
                 if not TEAM_MODE:
                     self.json(400, {"error": "本地模式无需登录"})
                     return
+                secure = self._password_transport()
+                if _login_throttled(self.client_address[0]):
+                    self.json(429, {"error": "尝试过于频繁，请一分钟后再试"})
+                    return
                 data = self.body_json()
-                rows = STORE.query("SELECT * FROM users WHERE username=? AND enabled=1", (data.get("username", ""),))
-                if not rows or not STORE.verify_password(data.get("password", ""), rows[0]["password_hash"]):
-                    raise PermissionError("用户名或密码错误")
-                token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-                token_hash = hashlib.sha256(token.encode()).hexdigest()
-                expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=12)).isoformat()
-                with STORE.transaction() as conn:
-                    conn.execute("INSERT INTO sessions VALUES(?,?,?,?,?)",
-                                 (token_hash, rows[0]["username"], csrf, expires, utcnow()))
-                body = json.dumps({"ok": True, "csrf_token": csrf}).encode("utf-8")
-                self._send(200, body, "application/json; charset=utf-8",
-                           {"Set-Cookie": f"spark_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"})
+                uname = str(data.get("username", "")).strip()
+                pwd = str(data.get("password", ""))
+                # 团队模式与 Nervos Talk 共用一套账号：成员直接用 Talk 用户名+密码登录，
+                # 首次登录自动开 viewer 账号；联络员预建的同名账号保留原角色并自动绑定。
+                user = _resolve_login_user(uname, pwd)
+                if not user:
+                    raise PermissionError("登录未通过：仅委员会的四个 Talk 账号可以登录。请核对 Talk 用户名和密码；若论坛要求额外验证，当前直登方式不支持。")
+                self._login_response(user["username"], secure=secure)
                 return
             session = self.require_auth()
             self.require_csrf(session)
@@ -1238,6 +1603,7 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     STORE.audit(session["username"], "ai_draft_generated", str(data.get("topic_url") or ""),
                                 {"template": data.get("template"), "provider": provider, "model": plan["model"]})
+                    _cache_review_draft(plan, content, analysis)
                     self.json(200, {"content": content, "prompt": stage2, "analysis": analysis})
                     return
                 content, error = tracker.call_ai_api(provider, api_key, plan["stages"][0]["prompt"],
@@ -1246,6 +1612,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise RuntimeError(error)
                 STORE.audit(session["username"], "ai_draft_generated", str(data.get("topic_url") or ""),
                             {"template": data.get("template"), "provider": provider, "model": plan["model"]})
+                _cache_review_draft(plan, content)
                 self.json(200, {"content": content, "prompt": plan["stages"][0]["prompt"]})
                 return
             if path == "/api/ai/translate":
@@ -1261,6 +1628,36 @@ class Handler(BaseHTTPRequestHandler):
                                                                settings["model"], timeout=120)
                 if error:
                     raise RuntimeError(error)
+                self.json(200, {"content": content})
+                return
+            if path == "/api/ai/transcript-polish":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能使用 AI 整理")
+                data = self.body_json()
+                text = str(data.get("text") or "").strip()
+                if not text:
+                    raise ValueError("没有可整理的转写内容")
+                glossary = str(data.get("glossary") or "").strip()
+                settings = legacy.ai_settings()
+                env = load_env()
+                api_key = env.get("SPARK_KIMI_API_KEY") if settings["provider"] == "kimi" else env.get("SPARK_AI_API_KEY")
+                prompt = (
+                    "你是会议纪要整理助手。下面是会议语音转写的原始文本，其中可能有同音错别字与断句错误，"
+                    "专有名词优先采用术语表中的写法。请整理成便于阅读的纪要底稿：\n"
+                    "1. 按发言人分段：能根据对话上下文推断不同发言人时用「发言人A：」「发言人B：」这类标记区分，"
+                    "发言回合轮换处必须换段；无法可靠区分时按语义段落组织。不要编造发言人姓名。\n"
+                    "2. 修正明显的语音识别错误，保持原意，不得添加原文中没有的事实、结论或承诺。\n"
+                    "3. 精简口语填充词（嗯、那个、就是说之类），保持口语自然、语句连贯。\n"
+                    "4. 每个段落开头保留原文的时间戳标记（如【03:12】），便于回查录音。\n"
+                    "5. 直接输出整理后的文本，不要输出任何解释或前后缀。\n\n"
+                    f"术语表：\n{glossary or '（无）'}\n\n原始转写：\n{text[:50000]}")
+                content, error = tracker_module().call_ai_api(settings["provider"], api_key, prompt,
+                                                                settings["model"], timeout=300)
+                if error:
+                    raise RuntimeError(error)
+                STORE.audit(session["username"], "transcript_polished", "",
+                            {"provider": settings["provider"], "model": settings["model"],
+                             "chars": len(text)})
                 self.json(200, {"content": content})
                 return
             if path == "/api/ai/summarize":
@@ -1319,6 +1716,184 @@ class Handler(BaseHTTPRequestHandler):
                 STORE.audit(session["username"], "local_settings_updated", "", {"changed": changed})
                 self.json(200, {"ok": True, "changed": changed, "restart_required": restart_required,
                                 "auto_notion": AUTO_NOTION})
+                return
+            if path == "/api/settings/forum":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能修改设置")
+                data = self.body_json()
+                username = str(data.get("talk_username") or "").strip()
+                if str(data.get("talk_password") or "").strip():
+                    raise ValueError("工作台不保存论坛密码；登录或发布时可单次输入")
+                if data.get("talk_api_key"):
+                    raise ValueError("Nervos Talk 发布不使用个人 API Key")
+                current = legacy.forum_binding()
+                if username and username != current:
+                    if TEAM_MODE:
+                        raise PermissionError("团队模式由管理员为工作台账号绑定论坛身份")
+                    legacy.set_forum_binding(username)
+                hf_token = str(data.get("hf_token") or "").strip()
+                if hf_token:
+                    from .setup import write_env
+                    env = load_env()
+                    env["SPARK_HF_TOKEN"] = hf_token
+                    write_env(env)
+                STORE.audit(session["username"], "forum_settings_updated", "",
+                            {"talk_username": legacy.forum_binding()})
+                self.json(200, {"ok": True, **_forum_settings_payload()})
+                return
+            if path == "/api/drafts":
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能保存草稿")
+                data = self.body_json()
+                topic_url = str(data.get("topic_url") or "").strip()
+                topic_id = legacy.topic_id_from_url(topic_url) if topic_url else str(data.get("topic_id") or "").strip()
+                content = str(data.get("content") or "").strip()
+                if not topic_id or not content:
+                    raise ValueError("缺少帖子链接或草稿内容")
+                draft_id = STORE.save_review_draft(
+                    topic_id, str(data.get("title") or ""),
+                    topic_url or f"https://talk.nervos.org/t/{topic_id}",
+                    str(data.get("template") or ""), content, str(data.get("analysis") or ""))
+                STORE.audit(session["username"], "review_draft_saved", topic_id, {"draft_id": draft_id})
+                self.json(200, {"ok": True, "id": draft_id})
+                return
+            if path in {"/api/drafts/edit", "/api/drafts/comment"}:
+                # A signed-in committee reviewer can edit and annotate drafts, not publish.
+                data = self.body_json()
+                draft_id, revision = data.get("id"), data.get("revision")
+                if type(draft_id) is not int or not isinstance(revision, str):
+                    raise ValueError("缺少有效的草稿编号或版本")
+                if path == "/api/drafts/edit":
+                    content = data.get("content")
+                    if not isinstance(content, str):
+                        raise ValueError("草稿正文必须为文本")
+                    result = STORE.edit_review_draft(draft_id, revision, content)
+                    action = "review_draft_edited"
+                else:
+                    start, end, body = data.get("start"), data.get("end"), data.get("body")
+                    if type(start) is not int or type(end) is not int or not isinstance(body, str):
+                        raise ValueError("请选中正文并填写批注")
+                    result = STORE.comment_on_review_draft(draft_id, revision, start, end, body, session["username"])
+                    action = "review_draft_commented"
+                STORE.audit(session["username"], action, str(draft_id), {})
+                self.json(200, result)
+                return
+            if path == "/api/drafts/reviewed":
+                # 委员会成员（viewer）也可标记已阅
+                data = self.body_json()
+                draft_id = int(data.get("id"))
+                if not STORE.review_draft(draft_id):
+                    raise ValueError("草稿不存在")
+                STORE.mark_review_draft(draft_id, session["username"], revision=data.get("revision"))
+                STORE.audit(session["username"], "review_draft_reviewed", str(draft_id), {})
+                self.json(200, {"ok": True})
+                return
+            if path == "/api/transcribe/install":
+                global _asr_installing, _diarization_installing
+                if session["role"] == "viewer":
+                    raise PermissionError("只读用户不能安装组件")
+                data = self.body_json()
+                if data.get("component") == "diarization":
+                    if _diarization_installed():
+                        self.json(200, {"ok": True, "installed": True})
+                        return
+                    if _diarization_installing:
+                        self.json(200, {"ok": True, "installing": True})
+                        return
+                    threading.Thread(target=_install_diarization, daemon=True).start()
+                    self.json(200, {"ok": True, "started": True})
+                    return
+                if _asr_installed():
+                    self.json(200, {"ok": True, "installed": True})
+                    return
+                if _asr_installing:
+                    self.json(200, {"ok": True, "installing": True})
+                    return
+                threading.Thread(target=_install_asr, daemon=True).start()
+                self.json(200, {"ok": True, "started": True})
+                return
+            if path == "/api/transcribe":
+                global _asr_busy, _asr_progress_file
+                if not _asr_installed():
+                    raise RuntimeError("本地转写环境未安装，请在会议纪要页点击「安装本地转写」")
+                if _asr_busy:
+                    raise RuntimeError("已有转写任务进行中，请稍候")
+                query = urllib.parse.parse_qs(parsed.query)
+                filename = os.path.basename((query.get("filename") or ["recording.webm"])[0])
+                model = (query.get("model") or ["small"])[0]
+                if model not in {"tiny", "base", "small", "medium", "large-v3"}:
+                    raise ValueError("无效模型")
+                raw = self.body_bytes(300_000_000)
+                uploads = ROOT / "runtime_uploads"
+                uploads.mkdir(exist_ok=True)
+                suffix = os.path.splitext(filename)[1] or ".webm"
+                tmp = uploads / f"upload_{secrets.token_hex(8)}{suffix}"
+                tmp.write_bytes(raw)
+                glossary_path = None
+                glossary = (query.get("glossary") or [""])[0].strip()
+                if glossary:
+                    glossary_path = uploads / f"upload_{secrets.token_hex(8)}.txt"
+                    glossary_path.write_text(glossary, encoding="utf-8")
+                diarize = (query.get("diarize") or [""])[0] in {"1", "true", "yes"}
+                script = TRANSCRIBE_SCRIPT
+                env = _asr_env()
+                extra_args: list[str] = []
+                if diarize:
+                    if not _diarization_installed():
+                        raise RuntimeError("说话人分离组件未安装，请在会议纪要页点击「安装说话人分离」")
+                    token = _hf_token()
+                    if not token:
+                        raise RuntimeError("未配置 Hugging Face Token（设置页「语音转写」区块填写）")
+                    script = DIARIZE_SCRIPT
+                    env = _diarize_env()
+                    _asr_progress_file = uploads / f"asr_progress_{secrets.token_hex(6)}.txt"
+                    extra_args = ["--token", token, "--progress-file", str(_asr_progress_file)]
+                STORE.audit(session["username"], "transcribe_started", "",
+                            {"model": model, "bytes": len(raw), "diarize": diarize})
+                _asr_busy = True
+                try:
+                    import subprocess
+                    command = [str(ASR_PYTHON), str(script), "--audio", str(tmp),
+                               "--model", model, "--language", "zh"]
+                    if glossary_path:
+                        command += ["--glossary-file", str(glossary_path)]
+                    command += extra_args
+                    result = subprocess.run(command, capture_output=True, text=True,
+                                            timeout=7200, env=env, encoding="utf-8",
+                                            errors="replace", creationflags=_no_window_flags())
+                    if result.returncode != 0:
+                        err_tail = (result.stderr or result.stdout)[-800:]
+                        if "401" in err_tail or "gated" in err_tail.lower():
+                            raise RuntimeError("Hugging Face 模型授权失败：请在 huggingface.co 登录后接受 "
+                                               "pyannote/segmentation-3.0、pyannote/speaker-diarization-3.1 "
+                                               "与 pyannote/speaker-diarization-community-1 的模型协议，"
+                                               "并确认 Token 有效")
+                        raise RuntimeError(f"转写失败: {err_tail}")
+                    value = None
+                    for line in reversed((result.stdout or "").splitlines()):
+                        line = line.strip()
+                        if line.startswith("{"):
+                            try:
+                                value = json.loads(line)
+                            except ValueError:
+                                value = None
+                            if value is not None:
+                                break
+                    if value is None:
+                        raise RuntimeError(f"转写输出解析失败，原始输出末尾: {(result.stdout or '')[-300:]}")
+                    STORE.audit(session["username"], "transcribed", "",
+                                {"model": model, "seconds": value.get("duration"),
+                                 "diarized": bool(value.get("diarized"))})
+                    self.json(200, value)
+                finally:
+                    _asr_busy = False
+                    for item in (tmp, glossary_path, _asr_progress_file):
+                        if item:
+                            try:
+                                item.unlink()
+                            except OSError:
+                                pass
+                    _asr_progress_file = None
                 return
             if path == "/api/notion/test":
                 self.json(200, {"user": automation().notion.me()})
@@ -1455,14 +2030,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/forum/post":
                 if session["role"] not in {"operator", "approver", "administrator"}:
                     raise PermissionError("当前角色无发帖权限")
+                self._password_transport()
                 data = self.body_json()
                 if data.get("confirmation") != "正式发布":
                     raise PermissionError("必须输入“正式发布”进行确认")
                 forum_username = session.get("forum_username")
                 if not forum_username:
                     raise PermissionError("当前工作台账号未绑定自己的 Nervos Talk 用户名")
-                response = post_as_user(str(data.get("topic_id", "")), data.get("raw", ""), forum_username)
-                STORE.audit(session["username"], "forum_posted", str(data.get("topic_id")),
+                topic_id, raw, password = str(data.get("topic_id") or ""), data.get("raw"), data.get("password")
+                if not re.fullmatch(r"[1-9][0-9]{0,17}", topic_id) or not isinstance(raw, str) or not raw.strip():
+                    raise ValueError("请提供有效的 Nervos Talk 帖子和非空草稿")
+                if not isinstance(password, str) or not password:
+                    raise ValueError("请单次输入绑定账号的 Talk 密码")
+                response = post_with_password(topic_id, raw, forum_username, password)
+                STORE.audit(session["username"], "forum_posted", topic_id,
                             {"forum_username": forum_username, "post_id": response.get("id")})
                 self.json(200, {"post_id": response.get("id"), "post_number": response.get("post_number")})
                 return
@@ -1617,6 +2198,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json(502, {"error": f"链上数据访问失败: {exc}"})
         except PermissionError as exc:
             self.json(403, {"error": str(exc)})
+        except ReviewConflict as exc:
+            self.json(409, {"error": str(exc)})
         except (ValueError, WorkflowInputError) as exc:
             self.json(400, {"error": str(exc)})
         except (KeyError, FileNotFoundError) as exc:
@@ -1638,6 +2221,12 @@ class Handler(BaseHTTPRequestHandler):
                 task_id = int(path.split("/")[3])
                 STORE.delete_task(task_id)
                 STORE.audit(session["username"], "task_deleted", str(task_id), {})
+                self.json(200, {"ok": True})
+                return
+            if path.startswith("/api/drafts/"):
+                draft_id = int(path.split("/")[3])
+                STORE.delete_review_draft(draft_id)
+                STORE.audit(session["username"], "review_draft_deleted", str(draft_id), {})
                 self.json(200, {"ok": True})
                 return
             if path.startswith("/api/meetings/"):
@@ -1669,7 +2258,7 @@ def main() -> None:
         print(f"Port {args.port} is already in use; selecting a free local port.", flush=True)
         server = ThreadingHTTPServer((HOST, 0), Handler)
     actual_port = int(server.server_address[1])
-    url = f"http://{HOST}:{actual_port}/"
+    url = f"http://{DISPLAY_HOST}:{actual_port}/"
     runtime_path = args.runtime_file.resolve() if args.runtime_file else None
     if runtime_path:
         temp = runtime_path.with_suffix(runtime_path.suffix + ".tmp")

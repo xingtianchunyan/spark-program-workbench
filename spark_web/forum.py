@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import html
+import http.cookiejar
 import json
-import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -12,6 +13,60 @@ from .config import setting
 
 
 TALK_ORIGIN = "https://talk.nervos.org"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class TalkSession:
+    """A short-lived, cookie-backed Talk session. Never saved or shared."""
+
+    def __init__(self, timeout: int = 30):
+        self.timeout = timeout
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), _NoRedirect())
+
+    def request(self, path: str, body: bytes | None = None, **headers) -> dict:
+        request = urllib.request.Request(TALK_ORIGIN + path, data=body, headers={
+            "User-Agent": "Spark-Program-Workbench/1.0", "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest", **headers,
+        })
+        with self.opener.open(request, timeout=self.timeout) as response:
+            result = json.load(response)
+        if not isinstance(result, dict):
+            raise ValueError("论坛返回了未知响应")
+        return result
+
+    def csrf(self) -> str:
+        return self.request("/session/csrf")["csrf"]
+
+    def login(self, username: str, password: str) -> None:
+        if not username or not password:
+            raise PermissionError("请输入本人的 Talk 用户名和密码")
+        try:
+            csrf = self.csrf()
+            body = urllib.parse.urlencode({"login": username, "password": password,
+                                           "authenticity_token": csrf, "second_factor_method": "1"}).encode()
+            result = self.request("/session", body, **{
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-CSRF-Token": csrf,
+            })
+        except (OSError, ValueError, KeyError):
+            raise PermissionError("无法在 Talk 完成密码登录，请检查网络或在论坛网页登录") from None
+        user = result.get("user")
+        if result.get("error") or not isinstance(user, dict) or str(user.get("username", "")).casefold() != username.casefold():
+            raise PermissionError("Talk 未确认该账号登录；请核对密码，或在论坛网页完成双因素验证")
+
+
+def verify_talk_credentials(username: str, password: str, timeout: int = 30) -> bool:
+    if not username or not password:
+        return False
+    try:
+        TalkSession(timeout).login(username.strip(), password)
+    except PermissionError:
+        return False
+    return True
 
 
 def _simplify_project_name(value: str) -> str:
@@ -227,12 +282,19 @@ completion_post_url 必须是委员会发布的结项/关停公告所在楼层�
     return value
 
 
-def post_as_user(topic_id: str, raw: str, forum_username: str) -> dict:
-    """Post with a per-user Discourse User API key; never accepts or stores a forum password."""
-    env_name = "SPARK_DISCOURSE_USER_API_KEY_" + re.sub(r"[^A-Z0-9]", "_", forum_username.upper())
-    api_key = os.environ.get(env_name) or setting(env_name)
-    if not api_key:
-        raise RuntimeError(f"未配置 {env_name}")
-    return _request_json(f"{TALK_ORIGIN}/posts.json", method="POST",
-                         payload={"topic_id": int(topic_id), "raw": raw},
-                         headers={"User-Api-Key": api_key})
+def post_with_password(topic_id: str, raw: str, forum_username: str, password: str) -> dict:
+    """Publish using a fresh Talk session for the explicitly bound account."""
+    session = TalkSession()
+    session.login(forum_username, password)
+    try:
+        csrf = session.csrf()
+    except (OSError, ValueError, KeyError):
+        raise RuntimeError("无法准备论坛发布，本次未发送回复") from None
+    try:
+        result = session.request("/posts.json", json.dumps({"topic_id": int(topic_id), "raw": raw}).encode(),
+                                 **{"Content-Type": "application/json", "X-CSRF-Token": csrf})
+    except (OSError, ValueError):
+        raise RuntimeError("未能确认发布结果；请先到原帖核对，再决定是否重试") from None
+    if not result.get("id") or not result.get("post_number"):
+        raise RuntimeError("论坛未确认回复成功；请先到原帖核对，再决定是否重试")
+    return result

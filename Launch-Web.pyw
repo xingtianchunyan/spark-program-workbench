@@ -44,7 +44,7 @@ def main() -> None:
         previous_stdout, previous_stderr = sys.stdout, sys.stderr
         sys.stdout = sys.stderr = log
         try:
-            sys.argv = ["spark_web.server", "--auto-shutdown"]
+            sys.argv = ["spark_web.server", "--auto-shutdown", *sys.argv[1:]]
             runpy.run_module("spark_web.server", run_name="__main__")
         except BaseException:
             traceback.print_exc()

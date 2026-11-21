@@ -23,3 +23,12 @@ tranfr_onboarding_data.md
 *.bak-migrate
 meetings/
 spark_program_knowledge_base.md
+project_wallets.json
+.talk_auth_pending.json
+.env
+asr_venv/
+runtime_uploads/
+setup-asr.log
+pre_review_analysis_last.md
+tunnel.url
+tools/cloudflared.exe

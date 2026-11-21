@@ -61,6 +61,26 @@ BEIJING_TZ = dt.timezone(dt.timedelta(hours=8))
 # 链上扫描结果缓存（含每条 tx 完整字段、游标、时间戳）；已加入 .gitignore
 SCAN_CACHE_PATH = ROOT / "chain_scan_cache.json"
 
+# 本地项目多签清单：未配置 Notion Token 时多签检索的兜底数据源
+# （{地址: 项目名}，已加入 .gitignore；配置 Token 后 Notion 项目列表优先）
+LOCAL_WALLETS_PATH = ROOT / "project_wallets.json"
+
+
+def local_project_wallets(path: Any = None) -> dict[str, str]:
+    """读取本地项目多签清单（无 Notion Token 时的兜底数据源）。
+
+    project_wallets.json 格式：{"ckb1...": "项目名"}；忽略 _ 开头的说明键
+    与项目名为空的条目（空名表示地址待确认，不参与检索）。"""
+    try:
+        raw = json.loads((Path(path) if path else LOCAL_WALLETS_PATH).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k).strip(): str(v).strip() for k, v in raw.items()
+            if isinstance(k, str) and not k.startswith("_")
+            and str(v or "").strip()}
+
 
 def _utcnow_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -96,11 +116,13 @@ def cached_main(cache_path: Any = None) -> dict:
     if not entry:
         return {"cached": False, "updated_at": None, "cursor": None, "scanned": 0,
                 "missing": [], "mismatched": [], "extra": []}
+    result = entry.get("result") or {}
     return {"cached": True, "updated_at": entry.get("updated_at"),
-            "cursor": entry.get("cursor"), "scanned": entry.get("scanned", 0),
-            "missing": entry.get("result", {}).get("missing", []),
-            "mismatched": entry.get("result", {}).get("mismatched", []),
-            "extra": entry.get("result", {}).get("extra", [])}
+            "cursor": entry.get("cursor"),
+            "scanned": result.get("scanned", entry.get("scanned", 0)),
+            "missing": result.get("missing", []),
+            "mismatched": result.get("mismatched", []),
+            "extra": result.get("extra", [])}
 
 
 def cached_multisig(cache_path: Any = None) -> dict:
@@ -724,7 +746,12 @@ def _page_property(page: dict, name: str) -> Any:
 
 
 def read_transactions_rows(notion: Any, config: dict) -> dict[str, dict]:
-    """transactions 表已有行，按交易哈希索引（含日期/类型/金额摘要）。"""
+    """transactions 表已有行，按交易哈希索引（含日期/类型/金额摘要）。
+
+    notion 为 None（未配置 Notion Token）时视为表为空：检索照常进行，
+    所有链上交易都报 missing，不阻断扫描。"""
+    if notion is None:
+        return {}
     title = _prop(config, "transactions", "title")
     type_key = _prop(config, "transactions", "type")
     date_key = _prop(config, "transactions", "date")
@@ -753,7 +780,12 @@ def _block_text(block: dict) -> str:
 def read_project_wallets(notion: Any, config: dict) -> dict[str, str]:
     """Notion 项目列表（进行中+已完成）中的多签地址 → 项目名。
 
-    地址来源：行「钱包」属性；属性为空时退而检索项目页内容块文本。"""
+    地址来源：行「钱包」属性；属性为空时退而检索项目页内容块文本。
+
+    notion 为 None（未配置 Notion Token）时返回空映射：链上检索照常，
+    只是用途列缺少项目名归一化。"""
+    if notion is None:
+        return {}
     found: dict[str, str] = {}
     for source in ("ongoing_projects", "completed_projects"):
         wallet_key = _prop(config, source, "wallet")
@@ -979,8 +1011,14 @@ def _inline_fund_source(notion: Any, page_id: str) -> str | None:
 
 
 def _multisig_pages(notion: Any, config: dict) -> dict[str, dict]:
-    """多签地址 → {project, page_id, source}（source 为资金使用情况内联库 id）。"""
+    """多签地址 → {project, page_id, source}（source 为资金使用情况内联库 id）。
+
+    notion 为 None（未配置 Notion Token）时改用本地 project_wallets.json
+    清单：page_id/source 为 None，表示没有项目页内联库可用于去重。"""
     pages: dict[str, dict] = {}
+    if notion is None:
+        return {addr: {"project": name, "page_id": None, "source": None}
+                for addr, name in local_project_wallets().items()}
     for source in ("ongoing_projects", "completed_projects"):
         wallet_key = _prop(config, source, "wallet")
         title_key = _prop(config, source, "title")
@@ -1004,7 +1042,13 @@ def scan_multisig(notion: Any, config: dict, rpc: ChainRPC,
     按 (日期, 金额) 对照各项目页「资金使用情况」内联库去重（不写 Notion）。
 
     结果持久化到扫描缓存；resume=True（默认）时断点续查——每个多签只增量拉取
-    缓存游标之后的新交易，遇到已缓存的 tx_hash 即停止，再与缓存行合并。"""
+    缓存游标之后的新交易，遇到已缓存的 tx_hash 即停止，再与缓存行合并。
+
+    notion 为 None（未配置 Notion Token）时改用本地 project_wallets.json
+    清单作为检索输入；清单为空则返回空列表且不触碰已有扫描缓存
+    （避免空结果覆盖历史结果）。"""
+    if notion is None and not local_project_wallets():
+        return []
     if main_records is None:
         main_records = fetch_main_wallet_records(rpc)
     # 条件①：主钱包历史流出交易的对手方；条件②：Notion 项目中出现的地址

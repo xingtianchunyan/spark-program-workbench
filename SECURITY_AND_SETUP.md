@@ -4,7 +4,7 @@
 
 - API keys are no longer stored in `spark_task_data.json`.
 - On the first launch, keys from an older JSON file are migrated automatically to `.env` and removed from JSON.
-- Nervos Talk username/password storage has been removed.
+- Team login and explicit publishing use short-lived Talk sessions, without saving the entered passwords or requiring a personal API key. Older versions may still have a plaintext `nervos_password` in `spark_task_data.json`; the workbench no longer uses it. See the browser README for migration.
 - JSON saves use an in-process lock plus atomic file replacement to avoid partial writes.
 - WebBridge is disabled by default and only accepts a fixed action allowlist from the workbench client.
 - Notion tasks are completed only after the corresponding Notion records have been read back and verified.
@@ -28,9 +28,9 @@ Create a Notion Personal Access Token, then run `Setup-Notion.bat`. The setup pr
 
 ## Browser service
 
-- The service is hard-coded to listen on `127.0.0.1`.
+- The default listener is `127.0.0.1`. Keep it on loopback behind a private HTTPS reverse proxy for team login; direct LAN HTTP would expose Talk passwords in transit.
 - State-changing requests require a CSRF token.
 - SQLite uses WAL and immediate transactions to prevent simultaneous browser requests from losing updates.
 - Verification-gated tasks cannot be checked manually.
-- Team mode stores password hashes, short-lived session hashes and audit events; it never stores Nervos Talk passwords.
+- Team mode requires a fresh Talk password check at sign-in and admits only the four committee identities. The legacy local password hashes are not used for browser login. Talk passwords entered for login or publishing are not persisted.
 - Do not expose the development server directly to a LAN or the Internet. Team deployment requires TLS plus an authenticated private proxy.
